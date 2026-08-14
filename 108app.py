@@ -120,29 +120,28 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         results_eligible = []
         results_ineligible = []
         
-        def get_valid_value(row_data, col_names, default='Unknown'):
-            """Safely extracts the first non-empty string, completely ignoring empty duplicate columns."""
-            for col in col_names:
-                val = row_data.get(col)
-                if val is not None:
-                    if isinstance(val, pd.Series):
-                        # Filter out nan, None, and empty spaces from duplicate columns
-                        valid_vals = [str(x).strip() for x in val if str(x).strip().lower() not in ['nan', 'none', '']]
-                        if valid_vals:
-                            return valid_vals[0]
-                    else:
+        def get_valid_value(row_data, target_substrings, default='Unknown'):
+            """Safely extracts the first non-empty string by checking exact matches and pandas-mangled duplicates (.1, .2)."""
+            for target in target_substrings:
+                for col in row_data.index:
+                    col_str = str(col).upper()
+                    # Check for exact match OR pandas mangled match (e.g., 'AGENT NAME.1')
+                    if col_str == target or col_str.startswith(f"{target}."):
+                        val = row_data[col]
                         v_str = str(val).strip()
-                        if v_str.lower() not in ['nan', 'none', '']:
+                        if v_str.lower() not in ['nan', 'none', '', 'na']:
                             return v_str
             return default
         
         for index, row in prem_df.iterrows():
             # Extract data using the robust UPPERCASE column names
             pol_num = str(row.get('POLICY NUMBER', '')).strip()
+            if not pol_num or pol_num.lower() == 'nan':
+                 pol_num = get_valid_value(row, ['POLICY NUMBER', 'POLICY_NUMBER'], '')
             
             # STREAMLIT_CHUNK:Robustly extracting Agent Details...
-            agent_code = get_valid_value(row, ['AGENT CODE', 'AGENT_CODE'], 'Unknown')
-            agent_name = get_valid_value(row, ['AGENT NAME', 'AGENT_NAME'], 'Unknown')
+            agent_code = get_valid_value(row, ['AGENT CODE', 'AGENT_CODE', 'AGENCY CODE', 'AGENCY_CODE'], 'Unknown')
+            agent_name = get_valid_value(row, ['AGENT NAME', 'AGENT_NAME', 'AGENCY NAME', 'AGENCY_NAME'], 'Unknown')
             
             premium = row.get(prem_col_name, 0)
             
