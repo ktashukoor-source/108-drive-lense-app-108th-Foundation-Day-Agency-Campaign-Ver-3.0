@@ -120,28 +120,45 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         results_eligible = []
         results_ineligible = []
         
-        def get_valid_value(row_data, target_substrings, default='Unknown'):
-            """Safely extracts the first non-empty string by checking exact matches and pandas-mangled duplicates (.1, .2)."""
-            for target in target_substrings:
-                for col in row_data.index:
-                    col_str = str(col).upper()
-                    # Check for exact match OR pandas mangled match (e.g., 'AGENT NAME.1')
-                    if col_str == target or col_str.startswith(f"{target}."):
-                        val = row_data[col]
-                        v_str = str(val).strip()
-                        if v_str.lower() not in ['nan', 'none', '', 'na']:
-                            return v_str
+        def get_valid_value(row_data, target_keywords, default='Unknown'):
+            """
+            Indestructible extractor: Searches all column names for specific keywords.
+            If a column contains ALL the keywords (e.g., 'AGENT' and 'NAME'), 
+            it grabs the first valid, non-empty string.
+            """
+            possible_values = []
+            
+            for col in row_data.index:
+                col_str = str(col).upper()
+                
+                # Check if all keywords are in the column name (e.g., AGENT and NAME)
+                if all(keyword in col_str for keyword in target_keywords):
+                    val = row_data[col]
+                    v_str = str(val).strip()
+                    
+                    # Ensure it's not a pandas NaN or empty string
+                    if v_str.lower() not in ['nan', 'none', '', 'na']:
+                        possible_values.append(v_str)
+            
+            # Return the first valid value found, otherwise the default
+            if possible_values:
+                return possible_values[-1] # Grabs the LAST valid one found (usually the .1 duplicate)
             return default
         
         for index, row in prem_df.iterrows():
-            # Extract data using the robust UPPERCASE column names
+            # Extract data using the indestructible extractor
             pol_num = str(row.get('POLICY NUMBER', '')).strip()
             if not pol_num or pol_num.lower() == 'nan':
-                 pol_num = get_valid_value(row, ['POLICY NUMBER', 'POLICY_NUMBER'], '')
+                 pol_num = get_valid_value(row, ['POLICY', 'NUMBER'], '')
             
             # STREAMLIT_CHUNK:Robustly extracting Agent Details...
-            agent_code = get_valid_value(row, ['AGENT CODE', 'AGENT_CODE', 'AGENCY CODE', 'AGENCY_CODE'], 'Unknown')
-            agent_name = get_valid_value(row, ['AGENT NAME', 'AGENT_NAME', 'AGENCY NAME', 'AGENCY_NAME'], 'Unknown')
+            agent_code = get_valid_value(row, ['AGENT', 'CODE'], 'Unknown')
+            if agent_code == 'Unknown':
+                 agent_code = get_valid_value(row, ['AGENCY', 'CODE'], 'Unknown')
+                 
+            agent_name = get_valid_value(row, ['AGENT', 'NAME'], 'Unknown')
+            if agent_name == 'Unknown':
+                 agent_name = get_valid_value(row, ['AGENCY', 'NAME'], 'Unknown')
             
             premium = row.get(prem_col_name, 0)
             
