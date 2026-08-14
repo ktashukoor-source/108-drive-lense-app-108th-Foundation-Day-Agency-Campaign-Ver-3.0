@@ -23,24 +23,28 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
     try:
         # 1. Load Premium Data
         prem_df = pd.read_csv(premium_file)
-        prem_df.columns = [str(c).strip() for c in prem_df.columns] # Clean column headers
-        prem_df = clean_policy_numbers(prem_df)
         
-        # Ensure required columns exist
-        required_prem_cols = ['Collection Date', 'Premium Amount', 'Policy Number', 'Agent Code', 'Agent Name', 'Source Indicator', 'Endorsement Number']
-        missing_cols = [col for col in required_prem_cols if col not in prem_df.columns and col.replace('Premium Amount', 'Net Premium') not in prem_df.columns]
+        # Convert all columns to uppercase and strip whitespace for robust matching
+        prem_df.columns = [str(c).strip().upper() for c in prem_df.columns]
+        
+        # Ensure required columns exist using UPPERCASE names
+        required_prem_cols = ['COLLECTION DATE', 'PREMIUM AMOUNT', 'POLICY NUMBER', 'AGENT CODE', 'AGENT NAME', 'SOURCE INDICATOR', 'ENDORSEMENT NUMBER']
+        missing_cols = [col for col in required_prem_cols if col not in prem_df.columns and col.replace('PREMIUM AMOUNT', 'NET PREMIUM') not in prem_df.columns]
+        
         if missing_cols:
-            return None, None, f"Error: Premium CSV is missing required columns: {', '.join(missing_cols)}"
+             return None, None, f"Error: Premium CSV is missing required columns (or they are named differently): {', '.join(missing_cols)}"
+             
+        prem_df = clean_policy_numbers(prem_df, 'POLICY NUMBER')
 
         # Handle Net Premium variation
-        prem_col_name = 'Premium Amount' if 'Premium Amount' in prem_df.columns else 'Net Premium'
+        prem_col_name = 'PREMIUM AMOUNT' if 'PREMIUM AMOUNT' in prem_df.columns else 'NET PREMIUM'
         prem_df[prem_col_name] = pd.to_numeric(prem_df[prem_col_name], errors='coerce').fillna(0)
 
         # 2. Load Motor Data (Optional)
         mot_df = pd.DataFrame()
         if motor_file:
             mot_df = pd.read_csv(motor_file)
-            mot_df.columns = [str(c).strip() for c in mot_df.columns]
+            mot_df.columns = [str(c).strip().upper() for c in mot_df.columns]
             mot_df = clean_policy_numbers(mot_df, 'POLICY_NUMBER')
             
         # 3. Handle Previous Output Override (Excel-Only or Excel+CSV)
@@ -49,15 +53,13 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         
         if prev_output_file:
             try:
-                # Load the specific override sheets
+                # Note: We do NOT uppercase Excel columns because they must match our exact output format
                 prev_eligible = pd.read_excel(prev_output_file, sheet_name='Eligible Policies Log')
                 prev_ineligible = pd.read_excel(prev_output_file, sheet_name='Ineligible Policies Log')
                 
-                # Clean policy numbers for matching
-                prev_eligible = clean_policy_numbers(prev_eligible)
-                prev_ineligible = clean_policy_numbers(prev_ineligible)
+                prev_eligible = clean_policy_numbers(prev_eligible, 'Policy Number')
+                prev_ineligible = clean_policy_numbers(prev_ineligible, 'Policy Number')
                 
-                # Prefix remarks to indicate they were grandfathered
                 if 'Remarks' in prev_eligible.columns:
                     prev_eligible['Remarks'] = "Since you uploaded it as already listed eligible - " + prev_eligible['Remarks'].astype(str)
                 if 'Reason for Ineligibility' in prev_ineligible.columns:
@@ -68,7 +70,8 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                 
                 # ZERO OVERLAP WARNING CHECK
                 if not prem_df.empty and not pre_approved.empty:
-                    overlap = prem_df['Policy Number'].isin(pre_approved['Policy Number']).any()
+                    # Note: We are comparing 'POLICY NUMBER' (Premium CSV) with 'Policy Number' (Excel)
+                    overlap = prem_df['POLICY NUMBER'].isin(pre_approved['Policy Number']).any()
                     if not overlap:
                         st.warning("🚨 **CRITICAL WARNING:** The previous output file you uploaded shares ZERO matching policies with the new Premium CSV data! Please double-check if you uploaded the correct previous version or used the right date range for your new CSV extracts. 🚨")
                         
@@ -79,41 +82,41 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         eligible_log = pd.DataFrame()
         ineligible_log = pd.DataFrame()
 
-        # Deduplicate: Remove pre-approved/rejected from the new pool to avoid double-scoring
+        # Deduplicate: Remove pre-approved/rejected from the new pool
         if not pre_approved.empty or not pre_rejected.empty:
             override_policies = pd.concat([pre_approved['Policy Number'], pre_rejected['Policy Number']])
-            prem_df = prem_df[~prem_df['Policy Number'].isin(override_policies)]
+            prem_df = prem_df[~prem_df['POLICY NUMBER'].isin(override_policies)]
 
-        # --- BEGIN RULE EVALUATIONS (Lines 1-8) ---
-        
-        # We will iterate through the remaining rows to apply the complex logic
-        # For a production app with millions of rows, this should be vectorized, 
-        # but iterrows is clearer for demonstrating the complex rule flow.
+        # --- BEGIN RULE EVALUATIONS ---
         
         results_eligible = []
         results_ineligible = []
         
         for index, row in prem_df.iterrows():
-            pol_num = row['Policy Number']
-            agent_code = row['Agent Code']
-            agent_name = row['Agent Name']
+            # Extract data using the robust UPPERCASE column names
+            pol_num = row['POLICY NUMBER']
+            agent_code = row['AGENT CODE']
+            agent_name = row['AGENT NAME']
             premium = row[prem_col_name]
+            
+            # The rest of the logic remains largely the same, but we must ensure we use 
+            # the uppercase keys when pulling data from the 'row' object
+            
             lob = str(pol_num)[6:12] if len(str(pol_num)) >= 12 else "Unknown"
             
-            # Line 1: Campaign Period (Assuming standard datetime format for simplicity in this demo)
+            # Line 1: Campaign Period 
             try:
-                col_date = pd.to_datetime(row['Collection Date'], dayfirst=True)
+                col_date = pd.to_datetime(row['COLLECTION DATE'], dayfirst=True)
                 start_date = pd.to_datetime('2026-07-23')
                 end_date = pd.to_datetime('2026-08-22')
                 if not (start_date <= col_date <= end_date):
                     results_ineligible.append({'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 'Reason for Ineligibility': 'Date out of Campaign Period (Line 1)'})
                     continue
             except:
-                 # If date fails to parse, we flag it for review later (Line 8), but let it pass date check for now
                  pass
 
             # Line 2: Endorsement Check
-            if str(row.get('Endorsement Number', '')).strip() != ':':
+            if str(row.get('ENDORSEMENT NUMBER', '')).strip() != ':':
                 results_ineligible.append({'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 'Reason for Ineligibility': 'Endorsement Record (Line 2)'})
                 continue
                 
@@ -125,12 +128,11 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
             # Line 4: Fresh/Old Business Validation
             review_flag = ""
             is_eligible_line4 = True
-            
             is_motor = lob in ['312601', '312602', '312603']
             
             if not is_motor:
                 # Path A (Non-Motor)
-                src_ind = str(row.get('Source Indicator', '')).upper()
+                src_ind = str(row.get('SOURCE INDICATOR', '')).upper()
                 if 'POLICY RENEWAL' in src_ind:
                     is_eligible_line4 = False
                     reason = "Policy Renewal (Line 4A)"
@@ -147,7 +149,6 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                         if prev_ins == 'THE NEW INDIA ASSURANCE COMPANY LTD':
                             prev_pol = str(mot_row['PREVIOUS_POLICY_NO'].iloc[0])
                             try:
-                                # Extract 9th and 10th characters (index 8 and 9)
                                 chars = prev_pol[8:10]
                                 val = int(chars)
                                 if val >= 25:
@@ -167,7 +168,6 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
             cat_num = 0
             prod_name = "Unmapped LOB"
             
-            # --- Dictionary Map from Rules Engine ---
             cat_map = {
                 '612695': (1, 4, 'New India Mediclaim'), '612628': (1, 4, 'Floater Mediclaim'), 
                 '612693': (1, 4, 'Arogya Sanjeevani'), '612624': (1, 4, 'Yuva Bharat'), '692630': (1, 4, 'Overseas Travel Ease Policy'),
@@ -193,7 +193,6 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                 else:
                     review_flag += " Unrecognized Non-Motor LOB code."
             else:
-                # Motor Rules (Line 6)
                 if not mot_df.empty:
                     mot_row = mot_df[mot_df['POLICY_NUMBER'] == pol_num]
                     if not mot_row.empty:
@@ -219,7 +218,6 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                                 elif m_body == 'STAFF BUS':
                                     cat_num, pts, prod_name = 6, 4, 'Staff Bus'
                                 else:
-                                    # Exception
                                     results_ineligible.append({'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 'Reason for Ineligibility': 'Unrecognized Body Type for Passenger Carrying', 'Review Needed': 'Check manual records to verify if actual usage is Taxi (<=6) or Staff Bus (Line 6)'})
                                     continue
                             elif m_class == 'C2-SCHOOL BUS(CARRYING>6)':
@@ -228,7 +226,6 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                     else:
                         review_flag += " Missing in Motor Data to evaluate Cat rules."
 
-            # Log Eligible
             results_eligible.append({
                 'Policy Number': pol_num, 'Agent Code': agent_code, 'Agent Name': agent_name, 
                 'Premium': premium, 'Product Category & Name': f"Cat {cat_num} - {prod_name}", 
@@ -237,18 +234,14 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
 
         # --- END ITERATION ---
         
-        # Convert list of dictionaries to DataFrames
         new_eligible = pd.DataFrame(results_eligible)
         new_ineligible = pd.DataFrame(results_ineligible)
         
-        # Combine with Pre-approved/rejected
         final_eligible = pd.concat([pre_approved, new_eligible]).drop_duplicates(subset=['Policy Number'], keep='first')
         final_ineligible = pd.concat([pre_rejected, new_ineligible]).drop_duplicates(subset=['Policy Number'], keep='first')
 
-        # --- GENERATE SUMMARY SCOREBOARD (Line 7 & 8) ---
         summary_data = []
         if not final_eligible.empty and 'Agent Code' in final_eligible.columns:
-            # Group by agent
             grouped = final_eligible.groupby(['Agent Code', 'Agent Name'])
             
             for name, group in grouped:
@@ -257,13 +250,11 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                 pol_count = group['Policy Number'].nunique()
                 total_pts = group['Points'].sum()
                 
-                # Extract category numbers to find unique count
                 cat_strings = group['Product Category & Name'].dropna().astype(str).tolist()
                 categories = set()
                 for c in cat_strings:
                     if 'Cat ' in c:
                         try:
-                            # Extract number after 'Cat '
                             cat_num = int(c.split('Cat ')[1].split(' -')[0])
                             if cat_num > 0: categories.add(cat_num)
                         except: pass
@@ -282,7 +273,6 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         
         summary_df = pd.DataFrame(summary_data)
         if not summary_df.empty:
-            # ASCENDING SORT FIX
             summary_df = summary_df.sort_values(by='Total Points', ascending=True)
 
         return summary_df, final_eligible, final_ineligible
