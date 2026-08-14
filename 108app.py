@@ -18,7 +18,10 @@ st.set_page_config(
 def clean_policy_numbers(df, col_name='POLICY NUMBER'):
     """Aggressively cleans policy numbers to fix zero-overlap issues."""
     if col_name in df.columns:
-        df[col_name] = df[col_name].astype(str).str.strip().str.rstrip(':')
+        # Convert to string and strip outer whitespace
+        df[col_name] = df[col_name].astype(str).str.strip()
+        # Remove ALL special characters (keep only alphanumeric) using regex
+        df[col_name] = df[col_name].str.replace(r'[^a-zA-Z0-9]', '', regex=True)
     return df
 
 # STREAMLIT_CHUNK:Starting main processing function...
@@ -51,11 +54,12 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         if motor_file:
             mot_df = pd.read_csv(motor_file)
             mot_df.columns = [' '.join(str(c).upper().split()) for c in mot_df.columns]
-            mot_df = clean_policy_numbers(mot_df, 'POLICY NUMBER') 
             
             # If the motor file specifically uses POLICY_NUMBER with an underscore, handle that:
             if 'POLICY_NUMBER' in mot_df.columns and 'POLICY NUMBER' not in mot_df.columns:
                 mot_df.rename(columns={'POLICY_NUMBER': 'POLICY NUMBER'}, inplace=True)
+                
+            mot_df = clean_policy_numbers(mot_df, 'POLICY NUMBER') 
             
         # STREAMLIT_CHUNK:Handling Previous Output File overrides...
         # 3. Handle Previous Output Override (Excel-Only or Excel+CSV)
@@ -155,6 +159,10 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
             agent_code = get_valid_value(row, ['AGENT', 'CODE'], 'Unknown')
             if agent_code == 'Unknown':
                  agent_code = get_valid_value(row, ['AGENCY', 'CODE'], 'Unknown')
+            
+            # CRITICAL FIX: Aggressively clean Agent Code (keep only letters & numbers)
+            if agent_code != 'Unknown':
+                 agent_code = re.sub(r'[^a-zA-Z0-9]', '', str(agent_code))
                  
             agent_name = get_valid_value(row, ['AGENT', 'NAME'], 'Unknown')
             if agent_name == 'Unknown':
@@ -210,6 +218,10 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                         prev_ins = str(mot_row['PREVIOUS INSURER NAME'].iloc[0]).strip().upper() if 'PREVIOUS INSURER NAME' in mot_df.columns else str(mot_row.get('PREVIOUS_INSURER_NAME', '')).strip().upper()
                         if prev_ins == 'THE NEW INDIA ASSURANCE COMPANY LTD':
                             prev_pol = str(mot_row['PREVIOUS POLICY NO'].iloc[0]) if 'PREVIOUS POLICY NO' in mot_df.columns else str(mot_row.get('PREVIOUS_POLICY_NO', ''))
+                            
+                            # CRITICAL FIX: Aggressively clean Previous Policy No to ensure the 9th/10th digits align perfectly
+                            prev_pol = re.sub(r'[^a-zA-Z0-9]', '', prev_pol)
+                            
                             try:
                                 chars = prev_pol[8:10]
                                 val = int(chars)
@@ -314,11 +326,17 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
              
         summary_data = []
         if not final_eligible.empty:
-            grouped = final_eligible.groupby(['Agent Code', 'Agent Name'])
+            # STRICT FIX: Group purely by the unique identifier (Agent Code)
+            grouped = final_eligible.groupby('Agent Code')
             
-            for name, group in grouped:
-                agent_code, agent_name = name
+            for agent_code, group in grouped:
+                # Resolve the best Agent Name for this Agent Code (ignore 'Unknown' if a real name exists)
+                names = group['Agent Name'].dropna().unique()
+                valid_names = [n for n in names if str(n).strip().lower() not in ['unknown', 'nan', '']]
+                agent_name = valid_names[0] if valid_names else "Unknown"
+                
                 total_prem = group['Premium'].sum()
+                # Use nunique() to strictly count unique policy numbers
                 pol_count = group['Policy Number'].nunique()
                 total_pts = group['Points'].sum()
                 
