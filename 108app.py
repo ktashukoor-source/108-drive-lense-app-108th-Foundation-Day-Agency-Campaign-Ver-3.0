@@ -106,8 +106,8 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         for index, row in prem_df.iterrows():
             # Extract data using the robust UPPERCASE column names
             pol_num = row.get('POLICY NUMBER', '')
-            agent_code = row.get('AGENT CODE', '')
-            agent_name = row.get('AGENT NAME', '')
+            agent_code = str(row.get('AGENT CODE', row.get('AGENT_CODE', '')))
+            agent_name = str(row.get('AGENT NAME', row.get('AGENT_NAME', 'Unknown')))
             premium = row.get(prem_col_name, 0)
             
             lob = str(pol_num)[6:12] if len(str(pol_num)) >= 12 else "Unknown"
@@ -292,7 +292,7 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         
         summary_df = pd.DataFrame(summary_data)
         if not summary_df.empty:
-            summary_df = summary_df.sort_values(by='Total Points', ascending=True)
+            summary_df = summary_df.sort_values(by='Total Points', ascending=False)
 
         return summary_df, final_eligible, final_ineligible
 
@@ -337,7 +337,7 @@ if st.button("Process Campaign Data", type="primary"):
                 st.success("Analysis Complete!")
                 st.markdown("**Note:** Please manually include Overseas Mediclaim, Criti Protect, and CGL Policies in your Eligible sheet if applicable, as their exact LOB codes are currently unidentified. Report LOB codes via WhatsApp to wa.me/919656077625.")
                 
-                st.subheader("Leaderboard Preview (Ascending)")
+                st.subheader("Leaderboard Preview (Descending)")
                 st.dataframe(summary)
                 
                 # --- ROBUST EXCEL GENERATION ---
