@@ -105,10 +105,10 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         
         for index, row in prem_df.iterrows():
             # Extract data using the robust UPPERCASE column names
-            pol_num = row['POLICY NUMBER']
-            agent_code = row['AGENT CODE']
-            agent_name = row['AGENT NAME']
-            premium = row[prem_col_name]
+            pol_num = row.get('POLICY NUMBER', '')
+            agent_code = row.get('AGENT CODE', '')
+            agent_name = row.get('AGENT NAME', '')
+            premium = row.get(prem_col_name, 0)
             
             lob = str(pol_num)[6:12] if len(str(pol_num)) >= 12 else "Unknown"
             
@@ -253,6 +253,11 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         final_eligible = pd.concat([pre_approved, new_eligible]).drop_duplicates(subset=['Policy Number'], keep='first')
         final_ineligible = pd.concat([pre_rejected, new_ineligible]).drop_duplicates(subset=['Policy Number'], keep='first')
 
+        # FIX: Ensure 'Agent Name' exists before grouping. If the 'results_eligible' was empty but 'pre_approved' wasn't,
+        # 'pre_approved' might not have 'Agent Name' if it wasn't in the original excel format.
+        if 'Agent Name' not in final_eligible.columns:
+             final_eligible['Agent Name'] = "Unknown"
+             
         summary_data = []
         if not final_eligible.empty and 'Agent Code' in final_eligible.columns:
             # We must ensure we are using the correct casing here based on how we constructed results_eligible
