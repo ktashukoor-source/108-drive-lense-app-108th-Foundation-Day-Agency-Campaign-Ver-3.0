@@ -47,11 +47,12 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
 
         # STREAMLIT_CHUNK:Loading and standardizing Motor Data...
         # 2. Load Motor Data (Optional)
-    mot_df = pd.DataFrame()
-    if motor_file:
-        mot_df = pd.read_csv(motor_file)
-        mot_df.columns = [' '.join(str(c).upper().split()) for c in mot_df.columns]
-        mot_df = clean_policy_numbers(mot_df, 'POLICY NUMBER') # Updated to look for upper case if it was standardized
+        mot_df = pd.DataFrame()
+        if motor_file:
+            mot_df = pd.read_csv(motor_file)
+            mot_df.columns = [' '.join(str(c).upper().split()) for c in mot_df.columns]
+            mot_df = clean_policy_numbers(mot_df, 'POLICY NUMBER') 
+            
             # If the motor file specifically uses POLICY_NUMBER with an underscore, handle that:
             if 'POLICY_NUMBER' in mot_df.columns and 'POLICY NUMBER' not in mot_df.columns:
                 mot_df.rename(columns={'POLICY_NUMBER': 'POLICY NUMBER'}, inplace=True)
