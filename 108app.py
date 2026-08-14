@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
+import re
 from datetime import datetime
 
 # --- UI CONFIGURATION ---
@@ -29,7 +30,7 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         prem_df = pd.read_csv(premium_file)
         
         # Convert all columns to uppercase and strip whitespace for robust matching
-        prem_df.columns = [str(c).strip().upper() for c in prem_df.columns]
+        prem_df.columns = [' '.join(str(c).upper().split()) for c in prem_df.columns]
         
         # Ensure required columns exist using UPPERCASE names
         required_prem_cols = ['COLLECTION DATE', 'PREMIUM AMOUNT', 'POLICY NUMBER', 'AGENT CODE', 'AGENT NAME', 'SOURCE INDICATOR', 'ENDORSEMENT NUMBER']
@@ -46,11 +47,11 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
 
         # STREAMLIT_CHUNK:Loading and standardizing Motor Data...
         # 2. Load Motor Data (Optional)
-        mot_df = pd.DataFrame()
-        if motor_file:
-            mot_df = pd.read_csv(motor_file)
-            mot_df.columns = [str(c).strip().upper() for c in mot_df.columns]
-            mot_df = clean_policy_numbers(mot_df, 'POLICY NUMBER') # Updated to look for upper case if it was standardized
+    mot_df = pd.DataFrame()
+    if motor_file:
+        mot_df = pd.read_csv(motor_file)
+        mot_df.columns = [' '.join(str(c).upper().split()) for c in mot_df.columns]
+        mot_df = clean_policy_numbers(mot_df, 'POLICY NUMBER') # Updated to look for upper case if it was standardized
             # If the motor file specifically uses POLICY_NUMBER with an underscore, handle that:
             if 'POLICY_NUMBER' in mot_df.columns and 'POLICY NUMBER' not in mot_df.columns:
                 mot_df.rename(columns={'POLICY_NUMBER': 'POLICY NUMBER'}, inplace=True)
@@ -66,11 +67,26 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                 prev_eligible = pd.read_excel(prev_output_file, sheet_name='Eligible Policies Log')
                 prev_ineligible = pd.read_excel(prev_output_file, sheet_name='Ineligible Policies Log')
                 
+                # Robust column alignment for older Excel formats
+                col_map_el = {}
+                for col in prev_eligible.columns:
+                    l_col = str(col).lower().strip()
+                    if 'category' in l_col: col_map_el[col] = 'Product Category & Name'
+                    elif l_col == 'agent name': col_map_el[col] = 'Agent Name'
+                    elif l_col == 'agent code': col_map_el[col] = 'Agent Code'
+                    elif l_col == 'policy number': col_map_el[col] = 'Policy Number'
+                    elif l_col == 'points': col_map_el[col] = 'Points'
+                    elif l_col == 'premium': col_map_el[col] = 'Premium'
+                prev_eligible.rename(columns=col_map_el, inplace=True)
+                
                 prev_eligible = clean_policy_numbers(prev_eligible, 'Policy Number')
                 prev_ineligible = clean_policy_numbers(prev_ineligible, 'Policy Number')
                 
                 if 'Remarks' in prev_eligible.columns:
                     prev_eligible['Remarks'] = "Since you uploaded it as already listed eligible - " + prev_eligible['Remarks'].astype(str)
+                elif 'Remark' in prev_eligible.columns:
+                    prev_eligible['Remarks'] = "Since you uploaded it as already listed eligible - " + prev_eligible['Remark'].astype(str)
+                    
                 if 'Reason for Ineligibility' in prev_ineligible.columns:
                     prev_ineligible['Reason for Ineligibility'] = "Since you uploaded it as already listed ineligible - " + prev_ineligible['Reason for Ineligibility'].astype(str)
                 
@@ -103,11 +119,30 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         results_eligible = []
         results_ineligible = []
         
+        def get_valid_value(row_data, col_names, default='Unknown'):
+            """Safely extracts the first non-empty string, completely ignoring empty duplicate columns."""
+            for col in col_names:
+                val = row_data.get(col)
+                if val is not None:
+                    if isinstance(val, pd.Series):
+                        # Filter out nan, None, and empty spaces from duplicate columns
+                        valid_vals = [str(x).strip() for x in val if str(x).strip().lower() not in ['nan', 'none', '']]
+                        if valid_vals:
+                            return valid_vals[0]
+                    else:
+                        v_str = str(val).strip()
+                        if v_str.lower() not in ['nan', 'none', '']:
+                            return v_str
+            return default
+        
         for index, row in prem_df.iterrows():
             # Extract data using the robust UPPERCASE column names
-            pol_num = row.get('POLICY NUMBER', '')
-            agent_code = str(row.get('AGENT CODE', row.get('AGENT_CODE', '')))
-            agent_name = str(row.get('AGENT NAME', row.get('AGENT_NAME', 'Unknown')))
+            pol_num = str(row.get('POLICY NUMBER', '')).strip()
+            
+            # STREAMLIT_CHUNK:Robustly extracting Agent Details...
+            agent_code = get_valid_value(row, ['AGENT CODE', 'AGENT_CODE'], 'Unknown')
+            agent_name = get_valid_value(row, ['AGENT NAME', 'AGENT_NAME'], 'Unknown')
+            
             premium = row.get(prem_col_name, 0)
             
             lob = str(pol_num)[6:12] if len(str(pol_num)) >= 12 else "Unknown"
@@ -253,14 +288,15 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         final_eligible = pd.concat([pre_approved, new_eligible]).drop_duplicates(subset=['Policy Number'], keep='first')
         final_ineligible = pd.concat([pre_rejected, new_ineligible]).drop_duplicates(subset=['Policy Number'], keep='first')
 
-        # FIX: Ensure 'Agent Name' exists before grouping. If the 'results_eligible' was empty but 'pre_approved' wasn't,
-        # 'pre_approved' might not have 'Agent Name' if it wasn't in the original excel format.
-        if 'Agent Name' not in final_eligible.columns:
-             final_eligible['Agent Name'] = "Unknown"
+        # FIX: Ensure critical columns exist and have no NaNs before grouping
+        for col in ['Agent Name', 'Agent Code']:
+            if col not in final_eligible.columns:
+                 final_eligible[col] = "Unknown"
+            final_eligible[col] = final_eligible[col].fillna("Unknown").astype(str)
+            final_eligible[col] = final_eligible[col].replace('nan', 'Unknown')
              
         summary_data = []
-        if not final_eligible.empty and 'Agent Code' in final_eligible.columns:
-            # We must ensure we are using the correct casing here based on how we constructed results_eligible
+        if not final_eligible.empty:
             grouped = final_eligible.groupby(['Agent Code', 'Agent Name'])
             
             for name, group in grouped:
@@ -269,14 +305,15 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                 pol_count = group['Policy Number'].nunique()
                 total_pts = group['Points'].sum()
                 
-                cat_strings = group['Product Category & Name'].dropna().astype(str).tolist()
+                cat_strings = group['Product Category & Name'].dropna().astype(str).tolist() if 'Product Category & Name' in group.columns else []
                 categories = set()
+                
+                # Robust Regex to extract Category Number (handles "Cat 4", "Category 4", "cat4", etc.)
                 for c in cat_strings:
-                    if 'Cat ' in c:
-                        try:
-                            cat_num = int(c.split('Cat ')[1].split(' -')[0])
-                            if cat_num > 0: categories.add(cat_num)
-                        except: pass
+                    match = re.search(r'(?i)cat(?:egory)?\s*(\d+)', c)
+                    if match:
+                        cat_num = int(match.group(1))
+                        if cat_num > 0: categories.add(cat_num)
                 
                 achieved_cats = list(categories)
                 
