@@ -33,7 +33,7 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         prem_df.columns = [' '.join(str(c).upper().split()) for c in prem_df.columns]
         
         # Ensure required columns exist using UPPERCASE names
-        required_prem_cols = ['COLLECTION DATE', 'PREMIUM AMOUNT', 'POLICY NUMBER', 'AGENT CODE', 'AGENT NAME', 'SOURCE INDICATOR', 'ENDORSEMENT NUMBER']
+        required_prem_cols = ['COLLECTION DATE', 'PREMIUM AMOUNT', 'POLICY NUMBER', 'SOURCE INDICATOR', 'ENDORSEMENT NUMBER']
         missing_cols = [col for col in required_prem_cols if col not in prem_df.columns and col.replace('PREMIUM AMOUNT', 'NET PREMIUM') not in prem_df.columns]
         
         if missing_cols:
