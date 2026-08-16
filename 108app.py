@@ -455,12 +455,12 @@ with col1:
     prem_file = st.file_uploader("Upload Premium CSV", type=['csv'])
 
 with col2:
-    st.subheader("2. Motor Details", help="To generate this: Dashboard -> Core reports -> Motor(Premium) -> Motor Business Details. Required if you have Motor policies. Export as CSV.")
-    mot_file = st.file_uploader("Upload Motor CSV (Optional)", type=['csv'])
+    st.subheader("2. Motor Details", help="To generate this: Dashboard -> Core reports -> Motor(Premium) -> Motor Business Details. Required to process Motor policies. Export as CSV.")
+    mot_file = st.file_uploader("Upload Motor CSV", type=['csv'])
     
 with col3:
     st.subheader("3. Previous Work")
-    prev_file = st.file_uploader("Upload Previous Output (.xlsx)", type=['xlsx'])
+    prev_file = st.file_uploader("Upload Previous Output (Optional) (.xlsx)", type=['xlsx'])
     st.caption("Upload a previously generated Excel file to keep your manual changes.")
 
 if st.button("Process Campaign Data", type="primary"):
