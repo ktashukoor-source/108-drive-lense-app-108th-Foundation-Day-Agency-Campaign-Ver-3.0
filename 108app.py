@@ -278,7 +278,8 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                 else:
                     mot_row = mot_df[mot_df['POLICY NUMBER'] == pol_num]
                     if not mot_row.empty:
-                        prev_ins = str(mot_row['PREVIOUS INSURER NAME'].iloc[0]).strip().upper() if 'PREVIOUS INSURER NAME' in mot_df.columns else ''
+                        # Strip whitespace AND common trailing/leading special characters like periods, commas, or dashes
+                        prev_ins = str(mot_row['PREVIOUS INSURER NAME'].iloc[0]).strip(" .,-").upper() if 'PREVIOUS INSURER NAME' in mot_df.columns else ''
                         if prev_ins == 'THE NEW INDIA ASSURANCE COMPANY LTD':
                             prev_pol = str(mot_row['PREVIOUS POLICY NO'].iloc[0]) if 'PREVIOUS POLICY NO' in mot_df.columns else ''
                             try:
