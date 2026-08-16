@@ -44,12 +44,12 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
             'LOB ID': 'LOB ID',
             'SOURCE INDICATOR': 'SOURCE INDICATOR',
             'COLLECTION DATE': 'COLLECTION DATE',
-            'AGENT NAME': 'AGENT NAME'
+            'AGENT NAME': 'AGENT NAME',
+            'POLICY INCEPTION DATE': 'POLICY INCEPTION DATE',
+            'POLICY EXPIRY DATE': 'POLICY EXPIRY DATE'
         }
         
-        # Rename available columns based on the map (handles potential variations gracefully)
-        prem_df.rename(columns=lambda c: prem_col_map.get(c, c), inplace=True)
-        
+        # Rename available columns based on the map
         required_prem_cols = ['COLLECTION DATE', 'PREMIUM AMOUNT', 'POLICY NUMBER', 'SOURCE INDICATOR', 'ENDORSEMENT NUMBER']
         missing_cols = [col for col in required_prem_cols if col not in prem_df.columns]
         
@@ -179,6 +179,31 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
             
             # LOB ID Extraction from Policy Number
             lob = str(pol_num)[6:12] if len(str(pol_num)) >= 12 else "Unknown"
+            is_motor = lob in ['312601', '312602', '312603']
+            
+            # --- LONG TERM POLICY PREMIUM ADJUSTMENT ---
+            premium_remark = ""
+            if not is_motor:
+                try:
+                    inc_val = row.get('POLICY INCEPTION DATE', row.get('COLLECTION DATE'))
+                    exp_val = row.get('POLICY EXPIRY DATE')
+                    
+                    if pd.notna(inc_val) and pd.notna(exp_val):
+                        # Attempt to parse the dates
+                        inc_date = pd.to_datetime(inc_val, errors='coerce', dayfirst=True)
+                        exp_date = pd.to_datetime(exp_val, errors='coerce', dayfirst=True)
+                        
+                        if pd.notna(inc_date) and pd.notna(exp_date):
+                            # Calculate duration in years
+                            days_diff = (exp_date - inc_date).days
+                            years = round(days_diff / 365.25)
+                            
+                            if years > 1:
+                                original_premium = premium
+                                premium = original_premium * years
+                                premium_remark = f" [Long-Term: Premium {original_premium} * {years} yrs = {premium}]"
+                except Exception:
+                    pass
             
             # STREAMLIT_CHUNK:Evaluating Line 1 & Line 2 constraints...
             # Line 1: Campaign Period 
@@ -187,20 +212,20 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                 start_date = pd.to_datetime('2026-07-23')
                 end_date = pd.to_datetime('2026-08-22')
                 if not (start_date <= col_date <= end_date):
-                    results_ineligible.append({'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 'Reason for Ineligibility': 'Date out of Campaign Period (Line 1)'})
+                    results_ineligible.append({'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 'Reason for Ineligibility': f'Date out of Campaign Period (Line 1){premium_remark}'})
                     continue
             except:
                  pass
 
             # Line 2: Endorsement Check
             if str(row.get('ENDORSEMENT NUMBER', '')).strip() != ':':
-                results_ineligible.append({'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 'Reason for Ineligibility': 'Endorsement Record (Line 2)'})
+                results_ineligible.append({'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 'Reason for Ineligibility': f'Endorsement Record (Line 2){premium_remark}'})
                 continue
                 
             # STREAMLIT_CHUNK:Evaluating Line 3 & Line 4 constraints...
             # Line 3: Minimum Premium
             if premium < 500:
-                results_ineligible.append({'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 'Reason for Ineligibility': 'Premium < 500 (Line 3)'})
+                results_ineligible.append({'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 'Reason for Ineligibility': f'Premium < 500 (Line 3){premium_remark}'})
                 continue
 
             # Line 4: Fresh/Old Business Validation
@@ -309,7 +334,7 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
             results_eligible.append({
                 'Policy Number': pol_num, 'Agent Code': agent_code, 'Agent Name': agent_name, 
                 'Premium': premium, 'Product Category & Name': f"Cat {cat_num} - {prod_name}", 
-                'Points': pts, 'Remarks': f"Meets criteria (Rule Line 5/6). mapped to {prod_name}", 'Review Needed': review_flag
+                'Points': pts, 'Remarks': f"Meets criteria (Rule Line 5/6). mapped to {prod_name}{premium_remark}", 'Review Needed': review_flag
             })
 
         # STREAMLIT_CHUNK:Consolidating final dataframes and generating summary...
@@ -388,11 +413,11 @@ Upload your exact CSV files from the core system. No data leaves your browser.
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.subheader("1. Premium Register")
+    st.subheader("1. Premium Register", help="To generate this: Dashboard -> Core reports -> Premium -> Premium Register. Ensure you export as CSV.")
     prem_file = st.file_uploader("Upload Premium CSV", type=['csv'])
 
 with col2:
-    st.subheader("2. Motor Details")
+    st.subheader("2. Motor Details", help="To generate this: Dashboard -> Core reports -> Motor(Premium) -> Motor Business Details. Required if you have Motor policies. Export as CSV.")
     mot_file = st.file_uploader("Upload Motor CSV (Optional)", type=['csv'])
     
 with col3:
@@ -419,9 +444,9 @@ if st.button("Process Campaign Data", type="primary"):
                     col_a, col_b = st.columns(2)
                     with col_a:
                         st.markdown("""
-                        * **Cat 1:** New India Mediclaim, Floater, Arogya Sanjeevani, Yuva Bharat, Overseas Travel Ease
+                        * **Cat 1:** New India Mediclaim, Floater, Arogya Sanjeevani, Yuva Bharat, Overseas Travel Ease, Overseas Mediclaim
                         * **Cat 2:** Top Up, Arogya Pragati Plus
-                        * **Cat 3:** Cancer Guard
+                        * **Cat 3:** Cancer Guard, Criti Protect
                         * **Cat 4:** Private Car Package
                         * **Cat 5:** Goods Carrying (GVW <= 7500), Taxis (<= 6 Seating)
                         * **Cat 6:** School Bus, Staff Bus
@@ -435,7 +460,7 @@ if st.button("Process Campaign Data", type="primary"):
                         * **Cat 11:** Mahila Udyam, Bima Saathi
                         * **Cat 12:** Jewellers Block
                         * **Cat 13:** Householder, Griha Suvidha, Shopkeepers, Office Protection Shield
-                        * **Cat 14:** Public Liability
+                        * **Cat 14:** Public Liability, CGL Policy
                         * **Cat 15:** My Cyber Policy
                         """)
 
