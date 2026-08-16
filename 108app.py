@@ -8,7 +8,7 @@ from datetime import datetime
 
 # --- UI CONFIGURATION ---
 st.set_page_config(
-    page_title="108 Drive Lense Campaign",
+    page_title="🏆 108 Drive Lense: 108th Foundation Day Agency Campaign 🤖 Ver 3.1",
     page_icon="🏆",
     layout="wide"
 )
@@ -16,12 +16,12 @@ st.set_page_config(
 # STREAMLIT_CHUNK:Defining data cleaning helper...
 # --- CORE LOGIC: DATA CLEANING ---
 def clean_policy_numbers(df, col_name):
-    """Aggressively cleans unique IDs to fix zero-overlap issues."""
+    """Aggressively cleans unique IDs (removes spaces, colons, hyphens) to fix zero-overlap issues."""
     if col_name in df.columns:
-        # Convert to string and strip outer whitespace
-        df[col_name] = df[col_name].astype(str).str.strip()
+        # Convert to string and explicitly replace Pandas 'nan' string representation with empty string before cleaning
+        df[col_name] = df[col_name].astype(str).replace(['nan', 'NaN'], '')
         # Remove ALL special characters (keep only alphanumeric) using regex
-        df[col_name] = df[col_name].str.replace(r'[^a-zA-Z0-9]', '', regex=True)
+        df[col_name] = df[col_name].apply(lambda x: re.sub(r'[^a-zA-Z0-9]', '', str(x)) if pd.notna(x) else x)
     return df
 
 # STREAMLIT_CHUNK:Starting main processing function...
@@ -32,10 +32,10 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         # 1. Load Premium Data
         prem_df = pd.read_csv(premium_file)
         
-        # Convert all columns to uppercase and strip whitespace for robust matching
-        prem_df.columns = [' '.join(str(c).upper().split()) for c in prem_df.columns]
+        # EXACT SCHEMA MAPPING: Convert all columns to uppercase and replace underscores with spaces
+        prem_df.columns = [str(c).replace('_', ' ').strip().upper() for c in prem_df.columns]
         
-        # Exact schema mapping based on user input
+        # We explicitly map the known variations to the exact internal keys we need
         prem_col_map = {
             'POLICY NUMBER': 'POLICY NUMBER',
             'ENDORSEMENT NUMBER': 'ENDORSEMENT NUMBER',
@@ -49,14 +49,16 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
             'POLICY EXPIRY DATE': 'POLICY EXPIRY DATE'
         }
         
-        # Rename available columns based on the map
+        # Rename available columns based on the explicit map, though the generic cleaner above usually handles it
+        prem_df.rename(columns=lambda c: prem_col_map.get(c, c), inplace=True)
+
         required_prem_cols = ['COLLECTION DATE', 'PREMIUM AMOUNT', 'POLICY NUMBER', 'SOURCE INDICATOR', 'ENDORSEMENT NUMBER']
         missing_cols = [col for col in required_prem_cols if col not in prem_df.columns]
         
         if missing_cols:
              return None, None, f"Error: Premium CSV is missing required columns (or they are named differently): {', '.join(missing_cols)}"
              
-        # Clean unique identifiers
+        # Clean unique identifiers using the aggressive regex function
         prem_df = clean_policy_numbers(prem_df, 'POLICY NUMBER')
         prem_df = clean_policy_numbers(prem_df, 'AGENT CODE')
 
@@ -68,24 +70,31 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         mot_df = pd.DataFrame()
         if motor_file:
             mot_df = pd.read_csv(motor_file)
-            mot_df.columns = [' '.join(str(c).upper().split()) for c in mot_df.columns]
             
-            # Exact schema mapping based on user input
+            # EXACT SCHEMA MAPPING: Convert all columns to uppercase and replace underscores with spaces
+            mot_df.columns = [str(c).replace('_', ' ').strip().upper() for c in mot_df.columns]
+            
+            # If the generic cleaner didn't perfectly align it (e.g. they exported 'POLICY NO'), force the map:
+            # Our generic cleaner turned POLICY_NUMBER into POLICY NUMBER, so this should just be a safety net.
             mot_col_map = {
-                'POLICY_NUMBER': 'POLICY NUMBER', # Standardize to match premium data
-                'PRODUCT_NAME': 'PRODUCT NAME',
-                'CLASS_OF_VEHICLE': 'CLASS OF VEHICLE',
-                'BODY_TYPE': 'BODY TYPE',
-                'GROSS_VEHICLE_WEIGHT': 'GROSS VEHICLE WEIGHT',
-                'PREVIOUS_INSURER_NAME': 'PREVIOUS INSURER NAME',
-                'PREVIOUS_POLICY_NO': 'PREVIOUS POLICY NO'
+                'PRODUCT NAME': 'PRODUCT NAME',
+                'CLASS OF VEHICLE': 'CLASS OF VEHICLE',
+                'BODY TYPE': 'BODY TYPE',
+                'GROSS VEHICLE WEIGHT': 'GROSS VEHICLE WEIGHT',
+                'PREVIOUS INSURER NAME': 'PREVIOUS INSURER NAME',
+                'PREVIOUS POLICY NO': 'PREVIOUS POLICY NO'
             }
             mot_df.rename(columns=lambda c: mot_col_map.get(c, c), inplace=True)
             
+            # Identify Policy Number robustly in case it was exported weirdly
             if 'POLICY NUMBER' not in mot_df.columns:
-                 return None, None, "Error: Could not identify a Policy Number column in the Motor Details CSV. Expected 'POLICY_NUMBER'."
+                potential_policy_cols = [c for c in mot_df.columns if 'POLICY' in c and ('NO' in c or 'NUM' in c)]
+                if potential_policy_cols:
+                    mot_df.rename(columns={potential_policy_cols[0]: 'POLICY NUMBER'}, inplace=True)
+                else:
+                    return None, None, "Error: Could not identify a Policy Number column in the Motor Details CSV."
                  
-            # Clean unique identifiers in motor data
+            # Clean unique identifiers in motor data using aggressive regex
             mot_df = clean_policy_numbers(mot_df, 'POLICY NUMBER') 
             mot_df = clean_policy_numbers(mot_df, 'PREVIOUS POLICY NO')
             
@@ -99,6 +108,26 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                 # Load exactly as specified by user
                 prev_eligible = pd.read_excel(prev_output_file, sheet_name='Eligible Policies Log')
                 prev_ineligible = pd.read_excel(prev_output_file, sheet_name='Ineligible Policies Log')
+                
+                # FORCE COLUMN ALIGNMENT FOR PREVIOUS EXCEL:
+                # To prevent 'Agent Name' from mismatching during concat due to capitalization/spaces
+                def standardize_excel_cols(df):
+                    new_cols = {}
+                    for c in df.columns:
+                        c_str = str(c).strip().lower()
+                        if 'policy' in c_str and 'number' in c_str: new_cols[c] = 'Policy Number'
+                        elif 'agent' in c_str and 'code' in c_str: new_cols[c] = 'Agent Code'
+                        elif 'agent' in c_str and 'name' in c_str: new_cols[c] = 'Agent Name'
+                        elif 'premium' in c_str: new_cols[c] = 'Premium'
+                        elif 'point' in c_str: new_cols[c] = 'Points'
+                        elif 'remark' in c_str: new_cols[c] = 'Remarks'
+                        elif 'review' in c_str: new_cols[c] = 'Review Needed'
+                        elif 'reason' in c_str: new_cols[c] = 'Reason for Ineligibility'
+                        elif 'category' in c_str: new_cols[c] = 'Product Category & Name'
+                    return df.rename(columns=new_cols)
+
+                prev_eligible = standardize_excel_cols(prev_eligible)
+                prev_ineligible = standardize_excel_cols(prev_ineligible)
                 
                 # Ensure correct types and handle missing values before cleaning
                 for df in [prev_eligible, prev_ineligible]:
@@ -153,7 +182,10 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         results_ineligible = []
         
         def get_valid_value(row_data, target_keywords, default='Unknown'):
-            """Searches all column names for specific keywords and returns the first valid string."""
+            """
+            Robust extractor: Searches all column names for specific keywords.
+            Returns the *last* valid string found (to handle Pandas duplicate col naming like 'Agent Name.1').
+            """
             possible_values = []
             for col in row_data.index:
                 col_str = str(col).upper()
@@ -169,10 +201,8 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         for index, row in prem_df.iterrows():
             pol_num = str(row.get('POLICY NUMBER', '')).strip()
             
-            # Robust Agent Code extraction
+            # Robust extraction handles duplicate Agent Name/Code columns
             agent_code = get_valid_value(row, ['AGENT', 'CODE'], 'Unknown')
-                 
-            # Robust Agent Name extraction
             agent_name = get_valid_value(row, ['AGENT', 'NAME'], 'Unknown')
             
             premium = row.get('PREMIUM AMOUNT', 0)
@@ -331,6 +361,7 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                         review_flag += " Missing in Motor Data to evaluate Cat rules."
 
             # STREAMLIT_CHUNK:Appending eligible record to results...
+            # If after all evaluations the category is 0 (Unmapped/Missing Data), it is INELIGIBLE
             if cat_num == 0:
                 results_ineligible.append({
                     'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 
@@ -364,17 +395,17 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
 
         summary_data = []
         if not final_eligible.empty:
-            # Group strictly by unique identifier (Agent Code)
+            # Group STRICTLY by unique identifier (Agent Code) to avoid splitting scores on name typos
             grouped = final_eligible.groupby('Agent Code')
             
             for agent_code, group in grouped:
-                # Resolve the best Agent Name for this Agent Code
+                # Resolve the best Agent Name for this Agent Code (ignoring 'Unknown' if a real name exists)
                 names = group['Agent Name'].dropna().unique()
                 valid_names = [n for n in names if str(n).strip().lower() not in ['unknown', 'nan', '']]
                 agent_name = valid_names[0] if valid_names else "Unknown"
                 
                 total_prem = group['Premium'].sum()
-                pol_count = group['Policy Number'].nunique()
+                pol_count = group['Policy Number'].nunique() # Use nunique to prevent double counting
                 total_pts = group['Points'].sum()
                 
                 cat_strings = group['Product Category & Name'].dropna().astype(str).tolist() if 'Product Category & Name' in group.columns else []
@@ -411,7 +442,7 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
 
 # STREAMLIT_CHUNK:Rendering Streamlit UI...
 # --- STREAMLIT UI LAYOUT ---
-st.title("108 Drive Lense: Campaign Analyzer")
+st.title("🏆 108 Drive Lense: Campaign Analyzer 🤖 Ver 3.1")
 st.markdown("""
 Welcome to the offline, secure data processor. 
 Upload your exact CSV files from the core system. No data leaves your browser.
@@ -451,9 +482,9 @@ if st.button("Process Campaign Data", type="primary"):
                     col_a, col_b = st.columns(2)
                     with col_a:
                         st.markdown("""
-                        * **Cat 1:** New India Mediclaim, Floater, Arogya Sanjeevani, Yuva Bharat, Overseas Travel Ease, Overseas Mediclaim
+                        * **Cat 1:** New India Mediclaim, Floater, Arogya Sanjeevani, Yuva Bharat, Overseas Travel Ease, **Overseas Mediclaim**
                         * **Cat 2:** Top Up, Arogya Pragati Plus
-                        * **Cat 3:** Cancer Guard, Criti Protect
+                        * **Cat 3:** Cancer Guard, **Criti Protect**
                         * **Cat 4:** Private Car Package
                         * **Cat 5:** Goods Carrying (GVW <= 7500), Taxis (<= 6 Seating)
                         * **Cat 6:** School Bus, Staff Bus
@@ -467,7 +498,7 @@ if st.button("Process Campaign Data", type="primary"):
                         * **Cat 11:** Mahila Udyam, Bima Saathi
                         * **Cat 12:** Jewellers Block
                         * **Cat 13:** Householder, Griha Suvidha, Shopkeepers, Office Protection Shield
-                        * **Cat 14:** Public Liability, CGL Policy
+                        * **Cat 14:** Public Liability, **CGL Policy**
                         * **Cat 15:** My Cyber Policy
                         """)
 
