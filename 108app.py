@@ -16,7 +16,7 @@ st.set_page_config(
 # STREAMLIT_CHUNK:Defining data cleaning helper...
 # --- CORE LOGIC: DATA CLEANING ---
 def clean_policy_numbers(df, col_name):
-    """Aggressively cleans unique IDs (removes spaces, colons, hyphens) to fix zero-overlap issues."""
+    """Aggressively cleans unique IDs (removes spaces, colons, hyphens, periods) to fix zero-overlap issues."""
     if col_name in df.columns:
         # Convert to string and explicitly replace Pandas 'nan' string representation with empty string before cleaning
         df[col_name] = df[col_name].astype(str).replace(['nan', 'NaN'], '')
@@ -41,16 +41,24 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
             'ENDORSEMENT NUMBER': 'ENDORSEMENT NUMBER',
             'AGENT CODE': 'AGENT CODE',
             'PREMIUM AMOUNT': 'PREMIUM AMOUNT',
+            'NET PREMIUM': 'PREMIUM AMOUNT',
             'LOB ID': 'LOB ID',
             'SOURCE INDICATOR': 'SOURCE INDICATOR',
             'COLLECTION DATE': 'COLLECTION DATE',
             'AGENT NAME': 'AGENT NAME',
+            'DEV OFFICER CODE': 'DEV OFFICER CODE',
             'POLICY INCEPTION DATE': 'POLICY INCEPTION DATE',
             'POLICY EXPIRY DATE': 'POLICY EXPIRY DATE'
         }
         
-        # Rename available columns based on the explicit map, though the generic cleaner above usually handles it
+        # Rename available columns based on the explicit map
         prem_df.rename(columns=lambda c: prem_col_map.get(c, c), inplace=True)
+        
+        # Robust Source Indicator identification if exact match failed
+        if 'SOURCE INDICATOR' not in prem_df.columns:
+            potential_source_cols = [c for c in prem_df.columns if 'SOURCE' in c and 'INDICATOR' in c]
+            if potential_source_cols:
+                 prem_df.rename(columns={potential_source_cols[0]: 'SOURCE INDICATOR'}, inplace=True)
 
         required_prem_cols = ['COLLECTION DATE', 'PREMIUM AMOUNT', 'POLICY NUMBER', 'SOURCE INDICATOR', 'ENDORSEMENT NUMBER']
         missing_cols = [col for col in required_prem_cols if col not in prem_df.columns]
@@ -61,6 +69,8 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         # Clean unique identifiers using the aggressive regex function
         prem_df = clean_policy_numbers(prem_df, 'POLICY NUMBER')
         prem_df = clean_policy_numbers(prem_df, 'AGENT CODE')
+        if 'DEV OFFICER CODE' in prem_df.columns:
+            prem_df = clean_policy_numbers(prem_df, 'DEV OFFICER CODE')
 
         # Ensure Premium Amount is numeric
         prem_df['PREMIUM AMOUNT'] = pd.to_numeric(prem_df['PREMIUM AMOUNT'], errors='coerce').fillna(0)
@@ -74,18 +84,6 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
             # EXACT SCHEMA MAPPING: Convert all columns to uppercase and replace underscores with spaces
             mot_df.columns = [str(c).replace('_', ' ').strip().upper() for c in mot_df.columns]
             
-            # If the generic cleaner didn't perfectly align it (e.g. they exported 'POLICY NO'), force the map:
-            # Our generic cleaner turned POLICY_NUMBER into POLICY NUMBER, so this should just be a safety net.
-            mot_col_map = {
-                'PRODUCT NAME': 'PRODUCT NAME',
-                'CLASS OF VEHICLE': 'CLASS OF VEHICLE',
-                'BODY TYPE': 'BODY TYPE',
-                'GROSS VEHICLE WEIGHT': 'GROSS VEHICLE WEIGHT',
-                'PREVIOUS INSURER NAME': 'PREVIOUS INSURER NAME',
-                'PREVIOUS POLICY NO': 'PREVIOUS POLICY NO'
-            }
-            mot_df.rename(columns=lambda c: mot_col_map.get(c, c), inplace=True)
-            
             # Identify Policy Number robustly in case it was exported weirdly
             if 'POLICY NUMBER' not in mot_df.columns:
                 potential_policy_cols = [c for c in mot_df.columns if 'POLICY' in c and ('NO' in c or 'NUM' in c)]
@@ -96,7 +94,8 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                  
             # Clean unique identifiers in motor data using aggressive regex
             mot_df = clean_policy_numbers(mot_df, 'POLICY NUMBER') 
-            mot_df = clean_policy_numbers(mot_df, 'PREVIOUS POLICY NO')
+            if 'PREVIOUS POLICY NO' in mot_df.columns:
+                mot_df = clean_policy_numbers(mot_df, 'PREVIOUS POLICY NO')
             
         # STREAMLIT_CHUNK:Handling Previous Output File overrides...
         # 3. Handle Previous Output Override (Excel-Only or Excel+CSV)
@@ -110,7 +109,6 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                 prev_ineligible = pd.read_excel(prev_output_file, sheet_name='Ineligible Policies Log')
                 
                 # FORCE COLUMN ALIGNMENT FOR PREVIOUS EXCEL:
-                # To prevent 'Agent Name' from mismatching during concat due to capitalization/spaces
                 def standardize_excel_cols(df):
                     new_cols = {}
                     for c in df.columns:
@@ -129,23 +127,17 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                 prev_eligible = standardize_excel_cols(prev_eligible)
                 prev_ineligible = standardize_excel_cols(prev_ineligible)
                 
-                # Ensure correct types and handle missing values before cleaning
-                for df in [prev_eligible, prev_ineligible]:
-                    if 'Policy Number' in df.columns:
-                         df['Policy Number'] = df['Policy Number'].astype(str)
-                    if 'Agent Code' in df.columns:
-                         df['Agent Code'] = df['Agent Code'].astype(str)
-                
-                if 'Agent Name' in prev_eligible.columns:
-                     prev_eligible['Agent Name'] = prev_eligible['Agent Name'].astype(str).replace(['nan', 'NaN', 'None', ''], "Unknown")
-                else:
-                     prev_eligible['Agent Name'] = "Unknown"
-                
+                # Clean before deduplication
                 prev_eligible = clean_policy_numbers(prev_eligible, 'Policy Number')
                 prev_ineligible = clean_policy_numbers(prev_ineligible, 'Policy Number')
                 
                 prev_eligible = clean_policy_numbers(prev_eligible, 'Agent Code')
                 prev_ineligible = clean_policy_numbers(prev_ineligible, 'Agent Code')
+                
+                if 'Agent Name' in prev_eligible.columns:
+                     prev_eligible['Agent Name'] = prev_eligible['Agent Name'].astype(str).replace(['nan', 'NaN', 'None', ''], "Unknown")
+                else:
+                     prev_eligible['Agent Name'] = "Unknown"
                 
                 if 'Remarks' in prev_eligible.columns:
                     prev_eligible['Remarks'] = "Since you uploaded it as already listed eligible - " + prev_eligible['Remarks'].astype(str)
@@ -182,10 +174,7 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         results_ineligible = []
         
         def get_valid_value(row_data, target_keywords, default='Unknown'):
-            """
-            Robust extractor: Searches all column names for specific keywords.
-            Returns the *last* valid string found (to handle Pandas duplicate col naming like 'Agent Name.1').
-            """
+            """Robust extractor: Searches all column names for specific keywords."""
             possible_values = []
             for col in row_data.index:
                 col_str = str(col).upper()
@@ -205,6 +194,13 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
             agent_code = get_valid_value(row, ['AGENT', 'CODE'], 'Unknown')
             agent_name = get_valid_value(row, ['AGENT', 'NAME'], 'Unknown')
             
+            # Fallback to Dev Officer Code for DIRECT business if Agent Code is missing
+            if agent_code == 'Unknown' or not str(agent_code).strip():
+                dev_code = get_valid_value(row, ['DEV', 'OFFICER', 'CODE'], 'Unknown')
+                if dev_code != 'Unknown' and str(dev_code).strip():
+                    agent_code = str(dev_code).strip()
+                    agent_name = "DIRECT"
+            
             premium = row.get('PREMIUM AMOUNT', 0)
             
             # LOB ID Extraction from Policy Number
@@ -219,12 +215,11 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                     exp_val = row.get('POLICY EXPIRY DATE')
                     
                     if pd.notna(inc_val) and pd.notna(exp_val):
-                        # Attempt to parse the dates
-                        inc_date = pd.to_datetime(inc_val, errors='coerce', dayfirst=True)
-                        exp_date = pd.to_datetime(exp_val, errors='coerce', dayfirst=True)
+                        # Attempt to parse without dayfirst to handle YYYY-MM-DD
+                        inc_date = pd.to_datetime(inc_val, errors='coerce')
+                        exp_date = pd.to_datetime(exp_val, errors='coerce')
                         
                         if pd.notna(inc_date) and pd.notna(exp_date):
-                            # Calculate duration in years
                             days_diff = (exp_date - inc_date).days
                             years = round(days_diff / 365.25)
                             
@@ -236,12 +231,13 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                     pass
             
             # STREAMLIT_CHUNK:Evaluating Line 1 & Line 2 constraints...
-            # Line 1: Campaign Period 
+            # Line 1: Campaign Period (Fixed date parsing)
             try:
-                col_date = pd.to_datetime(row['COLLECTION DATE'], dayfirst=True)
+                col_date = pd.to_datetime(row['COLLECTION DATE'], errors='coerce')
                 start_date = pd.to_datetime('2026-07-23')
                 end_date = pd.to_datetime('2026-08-22')
-                if not (start_date <= col_date <= end_date):
+                
+                if pd.isna(col_date) or not (start_date <= col_date <= end_date):
                     results_ineligible.append({'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 'Reason for Ineligibility': f'Date out of Campaign Period (Line 1){premium_remark}'})
                     continue
             except:
@@ -264,13 +260,13 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
             is_motor = lob in ['312601', '312602', '312603']
             
             if not is_motor:
-                # Path A (Non-Motor)
+                # Path A (Non-Motor) - Using detailed full string check
                 src_ind = str(row.get('SOURCE INDICATOR', '')).upper()
-                if 'POLICY RENEWAL' in src_ind:
+                if 'RENEWAL' in src_ind:
                     is_eligible_line4 = False
                     reason = "Policy Renewal (Line 4A)"
                 elif 'FRESH POLICY' not in src_ind:
-                    review_flag = "Confirm it is fresh business as Source Indicator does not explicitly say Fresh Policy (Line 4A)."
+                    review_flag = f"Confirm if fresh business. Source Indicator is '{src_ind}' (Line 4A)."
             else:
                 # Path B (Motor)
                 if mot_df.empty:
@@ -278,7 +274,7 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                 else:
                     mot_row = mot_df[mot_df['POLICY NUMBER'] == pol_num]
                     if not mot_row.empty:
-                        # Strip whitespace AND common trailing/leading special characters like periods, commas, or dashes
+                        # Strip whitespace AND punctuation
                         prev_ins = str(mot_row['PREVIOUS INSURER NAME'].iloc[0]).strip(" .,-").upper() if 'PREVIOUS INSURER NAME' in mot_df.columns else ''
                         if prev_ins == 'THE NEW INDIA ASSURANCE COMPANY LTD':
                             prev_pol = str(mot_row['PREVIOUS POLICY NO'].iloc[0]) if 'PREVIOUS POLICY NO' in mot_df.columns else ''
@@ -336,33 +332,33 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                         m_body = str(mot_row['BODY TYPE'].iloc[0]).upper() if 'BODY TYPE' in mot_df.columns else ''
                         m_gvw = pd.to_numeric(mot_row['GROSS VEHICLE WEIGHT'].iloc[0] if 'GROSS VEHICLE WEIGHT' in mot_df.columns else 0, errors='coerce')
                         
-                        if m_prod == 'PRIVATE CAR':
+                        if 'PRIVATE CAR' in m_prod:
                             if lob in ['312601', '312603']:
                                 cat_num, pts, prod_name = 4, 2, 'Private Car'
                             else:
                                 results_ineligible.append({'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 'Reason for Ineligibility': 'Liability Only (312602) not eligible for Private Car (Line 6)'})
                                 continue
-                        elif m_prod == 'COMMERCIAL VEHICLE':
-                            if m_class == 'A - GOODS CARRYING' and pd.notna(m_gvw) and m_gvw <= 7500:
+                        elif 'COMMERCIAL VEH' in m_prod:
+                            if 'GOODS CARRYING' in m_class and pd.notna(m_gvw) and m_gvw <= 7500:
                                 cat_num, pts, prod_name = 5, 3, 'Goods Carrying'
-                            elif m_class == 'C - PASSENGER CARRYING':
+                            elif 'PASSENGER CARRYING' in m_class:
                                 taxi_bodies = ['SALOON', 'SEDAN', 'HATCH-BACK', 'STATION WAGON/WAGON', 'SUV', 'SPORTS CAR/SUPER CAR']
-                                if m_body in taxi_bodies:
+                                if any(tb in m_body for tb in taxi_bodies):
                                     cat_num, pts, prod_name = 5, 3, 'Taxis'
                                     review_flag += " Verify Seating Capacity <= 6 (Line 6)."
-                                elif m_body == 'STAFF BUS':
+                                elif 'STAFF BUS' in m_body:
                                     cat_num, pts, prod_name = 6, 4, 'Staff Bus'
                                 else:
                                     results_ineligible.append({'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 'Reason for Ineligibility': 'Unrecognized Body Type for Passenger Carrying', 'Review Needed': 'Check manual records to verify if actual usage is Taxi (<=6) or Staff Bus (Line 6)'})
                                     continue
-                            elif m_class == 'C2-SCHOOL BUS(CARRYING>6)':
+                            elif 'SCHOOL BUS' in m_class:
                                 cat_num, pts, prod_name = 6, 4, 'School Bus'
                             
                     else:
                         review_flag += " Missing in Motor Data to evaluate Cat rules."
 
             # STREAMLIT_CHUNK:Appending eligible record to results...
-            # If after all evaluations the category is 0 (Unmapped/Missing Data), it is INELIGIBLE
+            # Divest Cat 0 into Ineligible Log so it doesn't inflate Eligible Premium sums
             if cat_num == 0:
                 results_ineligible.append({
                     'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 
@@ -396,17 +392,17 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
 
         summary_data = []
         if not final_eligible.empty:
-            # Group STRICTLY by unique identifier (Agent Code) to avoid splitting scores on name typos
+            # Group STRICTLY by unique identifier (Agent Code)
             grouped = final_eligible.groupby('Agent Code')
             
             for agent_code, group in grouped:
-                # Resolve the best Agent Name for this Agent Code (ignoring 'Unknown' if a real name exists)
+                # Resolve the best Agent Name for this Agent Code
                 names = group['Agent Name'].dropna().unique()
                 valid_names = [n for n in names if str(n).strip().lower() not in ['unknown', 'nan', '']]
                 agent_name = valid_names[0] if valid_names else "Unknown"
                 
                 total_prem = group['Premium'].sum()
-                pol_count = group['Policy Number'].nunique() # Use nunique to prevent double counting
+                pol_count = group['Policy Number'].nunique() 
                 total_pts = group['Points'].sum()
                 
                 cat_strings = group['Product Category & Name'].dropna().astype(str).tolist() if 'Product Category & Name' in group.columns else []
@@ -457,11 +453,11 @@ with col1:
 
 with col2:
     st.subheader("2. Motor Details", help="To generate this: Dashboard -> Core reports -> Motor(Premium) -> Motor Business Details. Required to process Motor policies. Export as CSV.")
-    mot_file = st.file_uploader("Upload Motor CSV", type=['csv'])
+    mot_file = st.file_uploader("Upload Motor CSV (Optional)", type=['csv'])
     
 with col3:
     st.subheader("3. Previous Work")
-    prev_file = st.file_uploader("Upload Previous Output (Optional) (.xlsx)", type=['xlsx'])
+    prev_file = st.file_uploader("Upload Previous Output (.xlsx)", type=['xlsx'])
     st.caption("Upload a previously generated Excel file to keep your manual changes.")
 
 if st.button("Process Campaign Data", type="primary"):
@@ -471,7 +467,6 @@ if st.button("Process Campaign Data", type="primary"):
         with st.spinner("Executing rule engine..."):
             summary, el_log, in_log = process_campaign_data(prem_file, mot_file, prev_file)
             
-            # If function returned an error string instead of dataframes
             if isinstance(in_log, str) and summary is None:
                 st.error(in_log)
             else:
@@ -509,7 +504,6 @@ if st.button("Process Campaign Data", type="primary"):
                 # --- ROBUST EXCEL GENERATION ---
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                    # Write DataFrames to Excel
                     if summary is not None and not summary.empty:
                          summary.to_excel(writer, sheet_name='Agent Summary Scoreboard', index=False)
                     if el_log is not None and not el_log.empty:
@@ -517,16 +511,12 @@ if st.button("Process Campaign Data", type="primary"):
                     if in_log is not None and not in_log.empty:
                          in_log.to_excel(writer, sheet_name='Ineligible Policies Log', index=False)
                     
-                    # Auto-adjust column widths
                     workbook = writer.book
                     for sheet_name in writer.sheets:
                         worksheet = writer.sheets[sheet_name]
-                        # Set default width 
                         worksheet.set_default_row(15)
-                        # We use a generic width assignment to avoid complex iteration logic here
                         worksheet.set_column('A:Z', 20) 
                 
-                # Create dynamic filename
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 file_name = f"108th_Campaign_Report_{timestamp}.xlsx"
                 
