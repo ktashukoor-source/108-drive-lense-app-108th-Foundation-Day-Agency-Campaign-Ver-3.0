@@ -331,11 +331,18 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
                         review_flag += " Missing in Motor Data to evaluate Cat rules."
 
             # STREAMLIT_CHUNK:Appending eligible record to results...
-            results_eligible.append({
-                'Policy Number': pol_num, 'Agent Code': agent_code, 'Agent Name': agent_name, 
-                'Premium': premium, 'Product Category & Name': f"Cat {cat_num} - {prod_name}", 
-                'Points': pts, 'Remarks': f"Meets criteria (Rule Line 5/6). mapped to {prod_name}{premium_remark}", 'Review Needed': review_flag
-            })
+            if cat_num == 0:
+                results_ineligible.append({
+                    'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 
+                    'Reason for Ineligibility': f"Unmapped LOB / Missing Categorization Data (Line 5/6){premium_remark}",
+                    'Review Needed': review_flag
+                })
+            else:
+                results_eligible.append({
+                    'Policy Number': pol_num, 'Agent Code': agent_code, 'Agent Name': agent_name, 
+                    'Premium': premium, 'Product Category & Name': f"Cat {cat_num} - {prod_name}", 
+                    'Points': pts, 'Remarks': f"Meets criteria (Rule Line 5/6). mapped to {prod_name}{premium_remark}", 'Review Needed': review_flag
+                })
 
         # STREAMLIT_CHUNK:Consolidating final dataframes and generating summary...
         # --- END ITERATION ---
