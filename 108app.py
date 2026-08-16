@@ -414,6 +414,31 @@ if st.button("Process Campaign Data", type="primary"):
                 st.success("Analysis Complete!")
                 st.markdown("**Note:** Please manually include Overseas Mediclaim, Criti Protect, and CGL Policies in your Eligible sheet if applicable, as their exact LOB codes are currently unidentified. Report LOB codes via WhatsApp to wa.me/919656077625.")
                 
+                st.subheader("Category Reference Guide")
+                with st.expander("View Category Numbers & Products", expanded=False):
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        st.markdown("""
+                        * **Cat 1:** New India Mediclaim, Floater, Arogya Sanjeevani, Yuva Bharat, Overseas Travel Ease
+                        * **Cat 2:** Top Up, Arogya Pragati Plus
+                        * **Cat 3:** Cancer Guard
+                        * **Cat 4:** Private Car Package
+                        * **Cat 5:** Goods Carrying (GVW <= 7500), Taxis (<= 6 Seating)
+                        * **Cat 6:** School Bus, Staff Bus
+                        * **Cat 7:** Bharat Griha Raksha, Bharat Sookshma Udyam Suraksha
+                        """)
+                    with col_b:
+                        st.markdown("""
+                        * **Cat 8:** Bharat Laghu Udyam Suraksha, Flexi Laghu
+                        * **Cat 9:** Personal Accident, Rasta Apatti Kavach (RAK)
+                        * **Cat 10:** Employee Compensation (WC)
+                        * **Cat 11:** Mahila Udyam, Bima Saathi
+                        * **Cat 12:** Jewellers Block
+                        * **Cat 13:** Householder, Griha Suvidha, Shopkeepers, Office Protection Shield
+                        * **Cat 14:** Public Liability
+                        * **Cat 15:** My Cyber Policy
+                        """)
+
                 st.subheader("Leaderboard Preview (Descending)")
                 st.dataframe(summary)
                 
