@@ -28,7 +28,7 @@ def clean_policy_numbers(df, col_name):
 # --- CORE LOGIC: RULE ENGINE ---
 def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
     try:
-        # STREAMLIT_CHUNK:Loading and standardizing Premium Data...
+        # STREAMLIT_CHUNK:Loading and validating Premium Data...
         # 1. Load Premium Data
         prem_df = pd.read_csv(premium_file)
         
@@ -36,6 +36,7 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         prem_df.columns = [str(c).replace('_', ' ').strip().upper() for c in prem_df.columns]
         
         # --- STRICT SCHEMA VALIDATION (PREMIUM) ---
+        # We check for a subset of critical columns that uniquely identify the "Premium Register"
         required_prem_identifiers = ['POLICY NUMBER', 'ENDORSEMENT NUMBER', 'COLLECTION DATE', 'LOB ID', 'SOURCE INDICATOR', 'AGENT CODE']
         missing_prem = [col for col in required_prem_identifiers if col not in prem_df.columns]
         
@@ -88,8 +89,7 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
 
         # Ensure Premium Amount is numeric
         prem_df['PREMIUM AMOUNT'] = pd.to_numeric(prem_df['PREMIUM AMOUNT'], errors='coerce').fillna(0)
-
-        # STREAMLIT_CHUNK:Loading and standardizing Motor Data...
+        # STREAMLIT_CHUNK:Loading and validating Motor Data...
         # 2. Load Motor Data (Optional)
         mot_df = pd.DataFrame()
         if motor_file:
@@ -99,6 +99,7 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
             mot_df.columns = [str(c).replace('_', ' ').strip().upper() for c in mot_df.columns]
             
             # --- STRICT SCHEMA VALIDATION (MOTOR) ---
+            # We check for a subset of critical columns that uniquely identify the "Motor Business Details" report
             required_mot_identifiers = ['POLICY NUMBER', 'CLASS OF VEHICLE', 'GROSS VEHICLE WEIGHT', 'PREVIOUS INSURER NAME']
             missing_mot = [col for col in required_mot_identifiers if col not in mot_df.columns]
             
@@ -483,12 +484,14 @@ with col1:
 with col2:
     st.subheader("2. Motor Details")
     st.info("**Download Path:**\n`Dashboard -> Core reports -> Motor(Premium) -> Motor Business Details`")
-    mot_file = st.file_uploader("Upload Motor CSV (Optional)", type=['csv'])
+    mot_file = st.file_uploader("Upload Motor CSV", type=['csv'])
     
 with col3:
+    st.markdown("<div style='opacity: 0.6;'>", unsafe_allow_html=True)
     st.subheader("3. Previous Work")
     st.info("**Manual Overrides:**\nUpload a previously generated Excel file to keep manual changes.")
-    prev_file = st.file_uploader("Upload Previous Output (.xlsx)", type=['xlsx'])
+    prev_file = st.file_uploader("Upload Previous Output (Optional)", type=['xlsx'])
+    st.markdown("</div>", unsafe_allow_html=True)
 
 if st.button("Process Campaign Data", type="primary"):
     if prem_file is None and prev_file is None:
