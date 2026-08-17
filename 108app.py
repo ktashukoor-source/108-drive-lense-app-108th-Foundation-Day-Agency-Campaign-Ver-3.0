@@ -35,6 +35,20 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
         # EXACT SCHEMA MAPPING: Convert all columns to uppercase and replace underscores with spaces
         prem_df.columns = [str(c).replace('_', ' ').strip().upper() for c in prem_df.columns]
         
+        # --- STRICT SCHEMA VALIDATION (PREMIUM) ---
+        required_prem_identifiers = ['POLICY NUMBER', 'ENDORSEMENT NUMBER', 'COLLECTION DATE', 'LOB ID', 'SOURCE INDICATOR', 'AGENT CODE']
+        missing_prem = [col for col in required_prem_identifiers if col not in prem_df.columns]
+        
+        if missing_prem:
+            error_msg = (
+                f"❌ **Invalid Premium Register File Uploaded.**\n\n"
+                f"The system did not recognize this file as the correct Premium Register. "
+                f"Missing expected columns like: {', '.join(missing_prem)}.\n\n"
+                f"**Please generate and download the correct report from:**\n"
+                f"`Dashboard -> Core reports -> Premium -> Premium Register`"
+            )
+            return None, None, error_msg
+
         # We explicitly map the known variations to the exact internal keys we need
         prem_col_map = {
             'POLICY NUMBER': 'POLICY NUMBER',
@@ -83,6 +97,20 @@ def process_campaign_data(premium_file, motor_file=None, prev_output_file=None):
             
             # EXACT SCHEMA MAPPING: Convert all columns to uppercase and replace underscores with spaces
             mot_df.columns = [str(c).replace('_', ' ').strip().upper() for c in mot_df.columns]
+            
+            # --- STRICT SCHEMA VALIDATION (MOTOR) ---
+            required_mot_identifiers = ['POLICY NUMBER', 'CLASS OF VEHICLE', 'GROSS VEHICLE WEIGHT', 'PREVIOUS INSURER NAME']
+            missing_mot = [col for col in required_mot_identifiers if col not in mot_df.columns]
+            
+            if missing_mot:
+                error_msg = (
+                    f"❌ **Invalid Motor Details File Uploaded.**\n\n"
+                    f"The system did not recognize this file as the correct Motor Business Details report. "
+                    f"Missing expected columns like: {', '.join(missing_mot)}.\n\n"
+                    f"**Please generate and download the correct report from:**\n"
+                    f"`Dashboard -> Core reports -> Motor(Premium) -> Motor Business Details`"
+                )
+                return None, None, error_msg
             
             # Identify Policy Number robustly in case it was exported weirdly
             if 'POLICY NUMBER' not in mot_df.columns:
@@ -448,17 +476,19 @@ Upload your exact CSV files from the core system. No data leaves your browser.
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.subheader("1. Premium Register", help="To generate this: Dashboard -> Core reports -> Premium -> Premium Register. Ensure you export as CSV.")
+    st.subheader("1. Premium Register")
+    st.info("**Download Path:**\n`Dashboard -> Core reports -> Premium -> Premium Register`")
     prem_file = st.file_uploader("Upload Premium CSV", type=['csv'])
 
 with col2:
-    st.subheader("2. Motor Details", help="To generate this: Dashboard -> Core reports -> Motor(Premium) -> Motor Business Details. Required to process Motor policies. Export as CSV.")
+    st.subheader("2. Motor Details")
+    st.info("**Download Path:**\n`Dashboard -> Core reports -> Motor(Premium) -> Motor Business Details`")
     mot_file = st.file_uploader("Upload Motor CSV (Optional)", type=['csv'])
     
 with col3:
     st.subheader("3. Previous Work")
+    st.info("**Manual Overrides:**\nUpload a previously generated Excel file to keep manual changes.")
     prev_file = st.file_uploader("Upload Previous Output (.xlsx)", type=['xlsx'])
-    st.caption("Upload a previously generated Excel file to keep your manual changes.")
 
 if st.button("Process Campaign Data", type="primary"):
     if prem_file is None and prev_file is None:
