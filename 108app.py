@@ -487,10 +487,10 @@ with col2:
     mot_file = st.file_uploader("Upload Motor CSV", type=['csv'])
     
 with col3:
-    st.markdown("<div style='opacity: 0.6;'>", unsafe_allow_html=True)
-    st.subheader("3. Previous Work")
+    st.markdown("<div style='opacity: 0.4;'>", unsafe_allow_html=True)
+    st.subheader("3. Previous Work (Optional)")
     st.info("**Manual Overrides:**\nUpload a previously generated Excel file to keep manual changes.")
-    prev_file = st.file_uploader("Upload Previous Output (Optional)", type=['xlsx'])
+    prev_file = st.file_uploader("Upload Previous Output (.xlsx)", type=['xlsx'])
     st.markdown("</div>", unsafe_allow_html=True)
 
 if st.button("Process Campaign Data", type="primary"):
