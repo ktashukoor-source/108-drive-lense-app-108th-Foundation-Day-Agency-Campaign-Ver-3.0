@@ -61,11 +61,18 @@ def process_campaign_data(prem_file, mot_file, ho_master_file):
         ho_fresh_policies = set()
         if ho_master_file is not None:
             try:
+                # First try: Read normally (if title row was manually deleted)
                 ho_df = pd.read_excel(ho_master_file, sheet_name='Total', dtype=str)
                 ho_df.columns = ho_df.columns.str.strip().str.upper()
                 
+                # Second try: If POLICY_NUMBER is missing, title row is likely blocking it. Skip first row.
+                if 'POLICY_NUMBER' not in ho_df.columns:
+                    ho_df = pd.read_excel(ho_master_file, sheet_name='Total', dtype=str, header=1)
+                    ho_df.columns = ho_df.columns.str.strip().str.upper()
+                
                 if 'POLICY_NUMBER' in ho_df.columns and 'TYPE_OF_POLICIES' in ho_df.columns:
                     ho_df = clean_policy_numbers(ho_df, 'POLICY_NUMBER')
+                    # Strict check for NEW POLICY
                     fresh_mask = ho_df['TYPE_OF_POLICIES'].str.strip().str.upper() == 'NEW POLICY'
                     ho_fresh_policies = set(ho_df.loc[fresh_mask, 'POLICY_NUMBER'].dropna().tolist())
                 else:
@@ -147,13 +154,11 @@ def process_campaign_data(prem_file, mot_file, ho_master_file):
                             m_prod = str(mot_row.get('PRODUCT_NAME', '')).upper()
                             m_class = str(mot_row.get('CLASS_OF_VEHICLE', '')).upper()
                             
-                            # Example Category matching based on previous rules
                             if is_eligible:
                                 if 'LIABILITY ONLY' in m_prod or lob == '312602':
                                     if 'PRIVATE CAR' in m_class or 'TWO WHEELER' in m_class:
                                          is_eligible = False
                                          ineligible_reason = f"Liability Only ({lob}) is not eligible for Private Car/Two Wheeler category (Line 6)"
-                                # Apply smarter partial matching
                                 elif 'COMMERCIAL VEH' in m_prod or 'GOODS CARRYING' in m_class:
                                     gvw_str = str(mot_row.get('GROSS_VEHICLE_WEIGHT', '0'))
                                     try:
