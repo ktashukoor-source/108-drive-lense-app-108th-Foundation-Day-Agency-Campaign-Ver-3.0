@@ -1,7 +1,15 @@
+This makes perfect sense. The old code had a beautifully comprehensive `cat_map` dictionary and a highly specific rule engine for evaluating Motor Body Types and GVW, which was lost when we rebuilt the validation layer.
+
+I have fully merged that precise **LOB extraction** (`pol_num[6:12]`), the complete **`cat_map` dictionary**, and the **detailed Motor Categorization logic** (checking for Taxis, Staff Buses, and Goods Carrying GVW <= 7500) back into our latest, ultra-secure version of the app.
+
+Here is the ultimate, fully merged `app.py`. Copy this and overwrite your file:
+
+```python
 import streamlit as st
 import pandas as pd
 import re
 from io import BytesIO
+from datetime import datetime
 
 # --- Configuration & Campaign Dates ---
 CAMPAIGN_START = pd.to_datetime('2026-07-23')
@@ -22,7 +30,7 @@ def process_campaign_data(prem_file, mot_file, ho_master_file):
         prem_df = pd.read_csv(prem_file, dtype=str)
         prem_df.columns = prem_df.columns.str.strip().str.upper()
 
-        required_prem_cols = ['POLICY NUMBER', 'ENDORSEMENT NUMBER', 'COLLECTION DATE', 'SOURCE INDICATOR', 'LOB ID']
+        required_prem_cols = ['POLICY NUMBER', 'ENDORSEMENT NUMBER', 'COLLECTION DATE', 'SOURCE INDICATOR']
         missing_prem = [col for col in required_prem_cols if col not in prem_df.columns]
         if missing_prem:
             return f"Validation Error: Premium Register missing columns: {', '.join(missing_prem)}.", None, None, None
@@ -71,6 +79,26 @@ def process_campaign_data(prem_file, mot_file, ho_master_file):
             except Exception as e:
                 return f"Error reading HO Master List: {str(e)}", None, None, None
 
+        # --- LOB CATEGORY MAP (From Original Code) ---
+        cat_map = {
+            '612695': (1, 4, 'New India Mediclaim'), '612628': (1, 4, 'Floater Mediclaim'), 
+            '612693': (1, 4, 'Arogya Sanjeevani'), '612624': (1, 4, 'Yuva Bharat'), '692630': (1, 4, 'Overseas Travel Ease Policy'),
+            '612678': (2, 3, 'Top Up Policy'), '612650': (2, 3, 'Arogya Pragati Plus'),
+            '612637': (3, 5, 'Cancer Guard Policy'),
+            '112686': (7, 4, 'Bharat Griha Raksha'), '112650': (7, 4, 'Bharat Griha Raksha'), 
+            '112680': (7, 4, 'Bharat Sookshma Udyam Suraksha Policy'), '112687': (7, 4, 'Bharat Sookshma Udyam Suraksha Policy'),
+            '112643': (8, 5, 'Bharat Laghu Udyam Suraksha Policy'), '112696': (8, 5, 'New India Bharat Flexi Laghu Udyam Suraksha'),
+            '652601': (9, 2, 'Personal Accident Policy'), '672601': (9, 2, 'Personal Accident Policy'), 
+            '682601': (9, 2, 'Personal Accident Policy'), '482668': (9, 2, 'Rasta Apatti Kavach (RAK) Policy'),
+            '412601': (10, 3, 'Employee Compensation (WC) Policy'),
+            '462689': (11, 3, 'Mahila Udyam Policy'), '462630': (11, 3, 'Bima Saathi Policy'),
+            '462607': (12, 5, 'Jewellers Block Policy'),
+            '482605': (13, 4, 'Householder Policy'), '482698': (13, 4, 'Griha Suvidha Policy'), 
+            '482606': (13, 4, 'Shopkeepers Policy'), '482607': (13, 4, 'Office Protection Shield Policy'),
+            '492607': (14, 4, 'Public Liability Policy'),
+            '362641': (15, 1, 'My Cyber Policy')
+        }
+
         # 4. INITIALIZE LOGS
         eligible_records = []
         ineligible_records = []
@@ -79,26 +107,33 @@ def process_campaign_data(prem_file, mot_file, ho_master_file):
         for index, row in prem_df.iterrows():
             policy_no = str(row['POLICY NUMBER'])
             col_date = row['COLLECTION DATE']
-            lob = str(row.get('LOB ID', '')).strip()
             src_ind = str(row.get('SOURCE INDICATOR', '')).strip().upper()
             endorsement_no = str(row.get('ENDORSEMENT NUMBER', '')).strip()
             agent_code = str(row.get('AGENT CODE', 'Unknown')).strip()
             agent_name = str(row.get('AGENT NAME', 'Unknown')).strip()
             premium = float(row.get('PREMIUM AMOUNT', 0)) if pd.notna(row.get('PREMIUM AMOUNT')) else 0.0
 
+            # Exact LOB Extraction from Old Code
+            lob_col_val = str(row.get('LOB ID', '')).strip()
+            lob = policy_no[6:12] if len(policy_no) >= 12 else lob_col_val
+            is_motor = lob in ['312601', '312602', '312603']
+
             is_eligible = True
             ineligible_reason = ""
             review_needed = ""
 
-            # Rule 1 & 2
+            # Line 1 & 2 Constraints
             if pd.isna(col_date) or col_date < CAMPAIGN_START or col_date > CAMPAIGN_END:
                 is_eligible = False
                 ineligible_reason = "Date out of Campaign Period (Line 1)"
             elif endorsement_no != ':':
                 is_eligible = False
                 ineligible_reason = "Endorsement Record (Line 2)"
+            elif premium < 500:
+                is_eligible = False
+                ineligible_reason = "Premium < 500 (Line 3)"
             else:
-                is_motor = lob.startswith('31')
+                # Line 4A/4B Constraints
                 if not is_motor:
                     if policy_no in ho_fresh_policies:
                         pass 
@@ -131,43 +166,60 @@ def process_campaign_data(prem_file, mot_file, ho_master_file):
                                                 ineligible_reason = f"Previous Insurer: New India Assurance & Previous Policy digits >= 25 ({val}) (Line 4B)"
                                         except ValueError:
                                             pass
-                            
+
+            # --- PRODUCT CATEGORIZATION ENGINE ---
+            cat_id = 0
+            cat_name = "Unmapped LOB"
+            points = 0
+
+            if is_eligible:
+                if not is_motor:
+                    if lob in cat_map:
+                        cat_id, points, cat_name = cat_map[lob]
+                    else:
+                        review_needed += " Unrecognized Non-Motor LOB code."
+                else:
+                    if not mot_df.empty:
+                        mot_matches = mot_df[mot_df['POLICY_NUMBER'] == policy_no]
+                        if not mot_matches.empty:
+                            mot_row = mot_matches.iloc[0]
                             m_prod = str(mot_row.get('PRODUCT_NAME', '')).upper()
                             m_class = str(mot_row.get('CLASS_OF_VEHICLE', '')).upper()
-                            if is_eligible:
-                                if 'LIABILITY ONLY' in m_prod or lob == '312602':
-                                    if 'PRIVATE CAR' in m_class or 'TWO WHEELER' in m_class:
-                                         is_eligible = False
-                                         ineligible_reason = f"Liability Only ({lob}) is not eligible for Private Car/Two Wheeler (Line 6)"
-                                elif 'COMMERCIAL VEH' in m_prod or 'GOODS CARRYING' in m_class:
-                                    gvw_str = str(mot_row.get('GROSS_VEHICLE_WEIGHT', '0'))
-                                    try:
-                                        gvw = float(re.sub(r'[^0-9.]', '', gvw_str)) if gvw_str.strip() != '' else 0
-                                        if gvw >= 7500:
-                                            is_eligible = False
-                                            ineligible_reason = "Commercial Vehicle GVW >= 7500kg (Line 6)"
-                                    except ValueError:
-                                        review_needed = "Could not parse GVW for Commercial Vehicle."
+                            m_body = str(mot_row.get('BODY_TYPE', '')).upper()
+                            m_gvw_str = str(mot_row.get('GROSS_VEHICLE_WEIGHT', '0'))
+                            m_gvw = float(re.sub(r'[^0-9.]', '', m_gvw_str)) if m_gvw_str.strip() != '' else 0
 
-            # --- PRODUCT CATEGORIZATION & FORMATTING OUTPUT ---
+                            if 'PRIVATE CAR' in m_prod:
+                                if lob in ['312601', '312603']:
+                                    cat_id, points, cat_name = 4, 2, 'Private Car'
+                                else:
+                                    is_eligible = False
+                                    ineligible_reason = "Liability Only (312602) not eligible for Private Car (Line 6)"
+                            elif 'COMMERCIAL VEH' in m_prod:
+                                if 'GOODS CARRYING' in m_class and m_gvw <= 7500:
+                                    cat_id, points, cat_name = 5, 3, 'Goods Carrying'
+                                elif 'PASSENGER CARRYING' in m_class:
+                                    taxi_bodies = ['SALOON', 'SEDAN', 'HATCH-BACK', 'STATION WAGON/WAGON', 'SUV', 'SPORTS CAR/SUPER CAR']
+                                    if any(tb in m_body for tb in taxi_bodies):
+                                        cat_id, points, cat_name = 5, 3, 'Taxis'
+                                        review_needed += " Verify Seating Capacity <= 6 (Line 6)."
+                                    elif 'STAFF BUS' in m_body:
+                                        cat_id, points, cat_name = 6, 4, 'Staff Bus'
+                                    else:
+                                        is_eligible = False
+                                        ineligible_reason = "Unrecognized Body Type for Passenger Carrying"
+                                        review_needed = "Check manual records to verify if actual usage is Taxi (<=6) or Staff Bus (Line 6)"
+                                elif 'SCHOOL BUS' in m_class:
+                                    cat_id, points, cat_name = 6, 4, 'School Bus'
+
+            # Build Final Rows
+            if is_eligible and cat_id == 0:
+                 # Demote unmapped eligible policies to ineligible log per original behavior
+                 is_eligible = False
+                 ineligible_reason = "Unmapped LOB / Missing Categorization Data (Line 5/6)"
+
             if is_eligible:
-                # Default Unmapped
-                cat_id = 0
-                cat_name = "Unmapped LOB"
-                points = 0
-                
-                # Basic Categorization Engine (Expand this block as needed)
-                if lob.startswith('11265'):
-                    cat_id = 7
-                    cat_name = "Bharat Griha Raksha"
-                    points = 4
-                elif lob.startswith('312601'):
-                    cat_id = 4
-                    cat_name = "Private Car"
-                    points = 2
-                
-                cat_remark = f"Meets criteria (Rule Line 5/6). mapped to {cat_name}" if cat_id > 0 else f"Meets criteria (Rule Line 5/6). Unrecognized LOB code."
-
+                cat_remark = f"Meets criteria (Rule Line 5/6). mapped to {cat_name}"
                 eligible_records.append({
                     'Policy Number': policy_no,
                     'Agent Code': agent_code,
@@ -176,8 +228,8 @@ def process_campaign_data(prem_file, mot_file, ho_master_file):
                     'Product Category & Nar': f"Cat {cat_id} - {cat_name}",
                     'Points': points,
                     'Remarks': cat_remark,
-                    'Review Needed': review_needed,
-                    'Cat_ID': cat_id # Internal use for scoreboard count
+                    'Review Needed': review_needed.strip(),
+                    'Cat_ID': cat_id # Internal mapping key
                 })
             else:
                 ineligible_records.append({
@@ -185,7 +237,7 @@ def process_campaign_data(prem_file, mot_file, ho_master_file):
                     'Agent Code': agent_code,
                     'Premium': premium,
                     'Reason for Ineligibility': ineligible_reason,
-                    'Review Needed': review_needed
+                    'Review Needed': review_needed.strip()
                 })
 
         # 6. CREATE OUTPUT DATAFRAMES
@@ -195,12 +247,11 @@ def process_campaign_data(prem_file, mot_file, ho_master_file):
         # 7. AGENT SCOREBOARD CALCULATIONS
         scoreboard = pd.DataFrame()
         if not df_eligible.empty:
-            # Group by Agent Code and Agent Name
             grouped = df_eligible.groupby(['Agent Code', 'Agent Name']).agg(
                 Eligible_Total_Premium=('Premium', 'sum'),
                 Eligible_Policy_Count=('Policy Number', 'count'),
                 Total_Points=('Points', 'sum'),
-                Unique_Cats=('Cat_ID', lambda x: x[x > 0].nunique()) # Count unique categories (ignoring unmapped Cat 0)
+                Unique_Cats=('Cat_ID', lambda x: x[x > 0].nunique())
             ).reset_index()
 
             score_list = []
@@ -221,12 +272,13 @@ def process_campaign_data(prem_file, mot_file, ho_master_file):
                 })
             
             scoreboard = pd.DataFrame(score_list).sort_values(by='Total Points', ascending=False)
-            df_eligible = df_eligible.drop(columns=['Cat_ID']) # Clean up internal column
+            df_eligible = df_eligible.drop(columns=['Cat_ID'])
 
         return None, df_eligible, df_ineligible, scoreboard
 
     except Exception as e:
-        return f"A critical error occurred during processing: {str(e)}", None, None, None
+        import traceback
+        return f"A critical error occurred: {str(e)}\nTraceback: {traceback.format_exc()}", None, None, None
 
 
 # --- UI Setup ---
@@ -273,18 +325,29 @@ if st.button("Process Campaign Data", type="primary"):
                 with tab3:
                     st.dataframe(df_inel, use_container_width=True)
                 
+                # Excel Generation with Column Width Auto-Adjustment
                 output = BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    if df_score is not None and not df_score.empty:
-                        df_score.to_excel(writer, sheet_name='Agent Summary Scoreboard', index=False)
-                    if df_el is not None and not df_el.empty:
-                        df_el.to_excel(writer, sheet_name='Eligible Policies Log', index=False)
-                    if df_inel is not None and not df_inel.empty:
-                        df_inel.to_excel(writer, sheet_name='Ineligible Policies Log', index=False)
+                    def format_sheet(df, name):
+                        if df is not None and not df.empty:
+                            df.to_excel(writer, sheet_name=name, index=False)
+                            worksheet = writer.sheets[name]
+                            for idx, col in enumerate(df):
+                                max_len = max(df[col].astype(str).map(len).max(), len(str(col))) + 2
+                                worksheet.set_column(idx, idx, min(max_len, 45))
+                    
+                    format_sheet(df_score, 'Agent Summary Scoreboard')
+                    format_sheet(df_el, 'Eligible Policies Log')
+                    format_sheet(df_inel, 'Ineligible Policies Log')
+                
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                file_name = f"108th_Campaign_Report_{timestamp}.xlsx"
                 
                 st.download_button(
                     label="📥 Download Full Report (Excel)",
                     data=output.getvalue(),
-                    file_name="108th_Campaign_Report.xlsx",
+                    file_name=file_name,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
+
+```
