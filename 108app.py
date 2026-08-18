@@ -23,7 +23,7 @@ def clean_policy_numbers(df, col_name):
     return df
 
 # --- CORE LOGIC: RULE ENGINE ---
-def process_campaign_data(premium_file, motor_file=None, ho_master_file=None):
+def process_campaign_data(premium_file, motor_file=None, cw_file=None, ho_master_file=None):
     try:
         # 1. Load Premium Data
         prem_df = pd.read_csv(premium_file)
@@ -90,7 +90,7 @@ def process_campaign_data(premium_file, motor_file=None, ho_master_file=None):
         if motor_file:
             mot_df = pd.read_csv(motor_file)
 
-            # EXACT SCHEMA MAPPING: Convert all columns to uppercase and replace underscores with spaces
+            # EXACT SCHEMA MAPPING
             mot_df.columns = [str(c).replace('_', ' ').strip().upper() for c in mot_df.columns]
 
             # --- STRICT SCHEMA VALIDATION (MOTOR) ---
@@ -107,7 +107,6 @@ def process_campaign_data(premium_file, motor_file=None, ho_master_file=None):
                 )
                 return None, None, error_msg
 
-            # Identify Policy Number robustly in case it was exported weirdly
             if 'POLICY NUMBER' not in mot_df.columns:
                 potential_policy_cols = [c for c in mot_df.columns if 'POLICY' in c and ('NO' in c or 'NUM' in c)]
                 if potential_policy_cols:
@@ -115,20 +114,33 @@ def process_campaign_data(premium_file, motor_file=None, ho_master_file=None):
                 else:
                     return None, None, "Error: Could not identify a Policy Number column in the Motor Details CSV."
 
-            # Clean unique identifiers in motor data using aggressive regex
             mot_df = clean_policy_numbers(mot_df, 'POLICY NUMBER') 
             if 'PREVIOUS POLICY NO' in mot_df.columns:
                 mot_df = clean_policy_numbers(mot_df, 'PREVIOUS POLICY NO')
 
-        # 3. Handle HO Master List (Optional)
+        # 3. Load Motor Class wise Premium Register (Optional)
+        cw_dict = {}
+        if cw_file:
+            cw_df = pd.read_csv(cw_file, dtype=str)
+            cw_df.columns = [str(c).replace('_', ' ').strip().upper() for c in cw_df.columns]
+            
+            if 'POLICY NUMBER' not in cw_df.columns or 'VEHICAL TYPE' not in cw_df.columns:
+                return None, None, "❌ **Invalid Class wise Premium Register.** Missing 'Policy Number' or 'Vehical Type' columns."
+            
+            # Clean Policy Numbers (Remove trailing colons specifically, then clean)
+            cw_df['POLICY NUMBER'] = cw_df['POLICY NUMBER'].astype(str).str.replace(':', '', regex=False)
+            cw_df = clean_policy_numbers(cw_df, 'POLICY NUMBER')
+            
+            # Create rapid lookup dictionary mapping Policy Number -> Vehical Type
+            cw_dict = dict(zip(cw_df['POLICY NUMBER'], cw_df['VEHICAL TYPE'].astype(str).str.strip().upper()))
+
+        # 4. Handle HO Master List (Optional)
         ho_fresh_policies = set()
         if ho_master_file:
             try:
-                # First try: Normal load
                 ho_df = pd.read_excel(ho_master_file, sheet_name='Total', dtype=str)
                 ho_df.columns = ho_df.columns.str.strip().str.upper()
                 
-                # Second try: If title row exists, skip it
                 if 'POLICY_NUMBER' not in ho_df.columns:
                     ho_df = pd.read_excel(ho_master_file, sheet_name='Total', dtype=str, header=1)
                     ho_df.columns = ho_df.columns.str.strip().str.upper()
@@ -142,7 +154,7 @@ def process_campaign_data(premium_file, motor_file=None, ho_master_file=None):
             except Exception as e:
                 return None, None, f"Could not read HO Master List. Ensure it's a valid Excel file with a 'Total' sheet. Error: {e}"
 
-        # 4. INITIALIZE LOGS
+        # 5. INITIALIZE LOGS
         results_eligible = []
         results_ineligible = []
 
@@ -164,11 +176,9 @@ def process_campaign_data(premium_file, motor_file=None, ho_master_file=None):
         for index, row in prem_df.iterrows():
             pol_num = str(row.get('POLICY NUMBER', '')).strip()
 
-            # Robust extraction handles duplicate Agent Name/Code columns
             agent_code = get_valid_value(row, ['AGENT', 'CODE'], 'Unknown')
             agent_name = get_valid_value(row, ['AGENT', 'NAME'], 'Unknown')
 
-            # Fallback to Dev Officer Code for DIRECT business if Agent Code is missing
             if agent_code == 'Unknown' or not str(agent_code).strip():
                 dev_code = get_valid_value(row, ['DEV', 'OFFICER', 'CODE'], 'Unknown')
                 if dev_code != 'Unknown' and str(dev_code).strip():
@@ -176,8 +186,6 @@ def process_campaign_data(premium_file, motor_file=None, ho_master_file=None):
                     agent_name = "DIRECT"
 
             premium = row.get('PREMIUM AMOUNT', 0)
-
-            # LOB ID Extraction from Policy Number
             lob = str(pol_num)[6:12] if len(str(pol_num)) >= 12 else "Unknown"
             is_motor = lob in ['312601', '312602', '312603']
 
@@ -189,7 +197,6 @@ def process_campaign_data(premium_file, motor_file=None, ho_master_file=None):
                     exp_val = row.get('POLICY EXPIRY DATE')
 
                     if pd.notna(inc_val) and pd.notna(exp_val):
-                        # Attempt to parse without dayfirst to handle YYYY-MM-DD
                         inc_date = pd.to_datetime(inc_val, errors='coerce')
                         exp_date = pd.to_datetime(exp_val, errors='coerce')
 
@@ -204,7 +211,7 @@ def process_campaign_data(premium_file, motor_file=None, ho_master_file=None):
                 except Exception:
                     pass
 
-            # Line 1: Campaign Period (Fixed date parsing)
+            # Line 1: Campaign Period
             try:
                 col_date = pd.to_datetime(row['COLLECTION DATE'], errors='coerce')
                 start_date = pd.to_datetime('2026-07-23')
@@ -231,10 +238,9 @@ def process_campaign_data(premium_file, motor_file=None, ho_master_file=None):
             is_eligible_line4 = True
 
             if pol_num in ho_fresh_policies:
-                pass # Master List says it is NEW POLICY, bypass strict checking!
+                pass # Master List says it is NEW POLICY
             else:
                 if not is_motor:
-                    # Path A (Non-Motor) - Using detailed full string check
                     src_ind = str(row.get('SOURCE INDICATOR', '')).upper()
                     if 'RENEWAL' in src_ind:
                         is_eligible_line4 = False
@@ -242,13 +248,11 @@ def process_campaign_data(premium_file, motor_file=None, ho_master_file=None):
                     elif 'FRESH POLICY' not in src_ind:
                         review_flag = f"Confirm if fresh business. Source Indicator is '{src_ind}' (Line 4A)."
                 else:
-                    # Path B (Motor)
                     if mot_df.empty:
                         review_flag = "Motor details missing. Cannot validate Previous Insurer (Line 4B)."
                     else:
                         mot_row = mot_df[mot_df['POLICY NUMBER'] == pol_num]
                         if not mot_row.empty:
-                            # Strip whitespace AND punctuation
                             prev_ins = str(mot_row['PREVIOUS INSURER NAME'].iloc[0]).strip(" .,-").upper() if 'PREVIOUS INSURER NAME' in mot_df.columns else ''
                             if prev_ins == 'THE NEW INDIA ASSURANCE COMPANY LTD':
                                 prev_pol = str(mot_row['PREVIOUS POLICY NO'].iloc[0]) if 'PREVIOUS POLICY NO' in mot_df.columns else ''
@@ -274,9 +278,10 @@ def process_campaign_data(premium_file, motor_file=None, ho_master_file=None):
 
             cat_map = {
                 '612695': (1, 4, 'New India Mediclaim'), '612628': (1, 4, 'Floater Mediclaim'), 
-                '612693': (1, 4, 'Arogya Sanjeevani'), '612624': (1, 4, 'Yuva Bharat'), '692630': (1, 4, 'Overseas Travel Ease Policy'),
+                '612693': (1, 4, 'Arogya Sanjeevani'), '612624': (1, 4, 'Yuva Bharat'), 
+                '692609': (1, 4, 'Overseas Mediclaim'), '692630': (1, 4, 'Overseas Mediclaim'), 
                 '612678': (2, 3, 'Top Up Policy'), '612650': (2, 3, 'Arogya Pragati Plus'),
-                '612637': (3, 5, 'Cancer Guard Policy'),
+                '612637': (3, 5, 'Cancer Guard Policy'), '612631': (3, 5, 'Criti Protect'),
                 '112686': (7, 4, 'Bharat Griha Raksha'), '112650': (7, 4, 'Bharat Griha Raksha'), 
                 '112680': (7, 4, 'Bharat Sookshma Udyam Suraksha Policy'), '112687': (7, 4, 'Bharat Sookshma Udyam Suraksha Policy'),
                 '112643': (8, 5, 'Bharat Laghu Udyam Suraksha Policy'), '112696': (8, 5, 'New India Bharat Flexi Laghu Udyam Suraksha'),
@@ -316,14 +321,42 @@ def process_campaign_data(premium_file, motor_file=None, ho_master_file=None):
                                 cat_num, pts, prod_name = 5, 3, 'Goods Carrying'
                             elif 'PASSENGER CARRYING' in m_class:
                                 taxi_bodies = ['SALOON', 'SEDAN', 'HATCH-BACK', 'STATION WAGON/WAGON', 'SUV', 'SPORTS CAR/SUPER CAR']
-                                if any(tb in m_body for tb in taxi_bodies):
+                                is_taxi_body = any(tb in m_body for tb in taxi_bodies)
+                                
+                                def is_cw_taxi_match(cw_v_type):
+                                    # Standardize spacing to robustly match 'C - Passenger Carrying : C1-Four Wheeler(Carrying <=6)'
+                                    v = cw_v_type.replace(" ", "")
+                                    return 'C1-FOURWHEELER' in v and '<=6' in v
+
+                                if is_taxi_body:
+                                    # Tentatively Eligible
                                     cat_num, pts, prod_name = 5, 3, 'Taxis'
                                     review_flag += " Verify Seating Capacity <= 6 (Line 6)."
+                                    
+                                    # DEMOTION LOGIC: Check Class-Wise override
+                                    if cw_dict and pol_num in cw_dict:
+                                        cw_veh_type = cw_dict[pol_num]
+                                        if not is_cw_taxi_match(cw_veh_type):
+                                            results_ineligible.append({'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 'Reason for Ineligibility': f'Class-wise Check Failed: Vehical Type is "{cw_veh_type}" (Line 6)', 'Review Needed': 'Demoted from Taxi based on Class Wise Premium Register.'})
+                                            continue # Fails and skips addition to eligible log
+                                            
                                 elif 'STAFF BUS' in m_body:
                                     cat_num, pts, prod_name = 6, 4, 'Staff Bus'
                                 else:
-                                    results_ineligible.append({'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 'Reason for Ineligibility': 'Unrecognized Body Type for Passenger Carrying', 'Review Needed': 'Check manual records to verify if actual usage is Taxi (<=6) or Staff Bus (Line 6)'})
-                                    continue
+                                    # Tentatively Ineligible
+                                    promoted = False
+                                    
+                                    # PROMOTION LOGIC: Check Class-Wise override
+                                    if cw_dict and pol_num in cw_dict:
+                                        cw_veh_type = cw_dict[pol_num]
+                                        if is_cw_taxi_match(cw_veh_type):
+                                            cat_num, pts, prod_name = 5, 3, 'Taxis'
+                                            review_flag += " Promoted to Taxi based on Class Wise Premium Register."
+                                            promoted = True
+                                            
+                                    if not promoted:
+                                        results_ineligible.append({'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 'Reason for Ineligibility': 'Unrecognized Body Type for Passenger Carrying', 'Review Needed': 'Check manual records to verify if actual usage is Taxi (<=6) or Staff Bus (Line 6)'})
+                                        continue
                         elif 'SCHOOL BUS' in m_class:
                             cat_num, pts, prod_name = 6, 4, 'School Bus'
 
@@ -335,20 +368,19 @@ def process_campaign_data(premium_file, motor_file=None, ho_master_file=None):
                 results_ineligible.append({
                     'Policy Number': pol_num, 'Agent Code': agent_code, 'Premium': premium, 
                     'Reason for Ineligibility': f"Unmapped LOB / Missing Categorization Data (Line 5/6){premium_remark}",
-                    'Review Needed': review_flag
+                    'Review Needed': review_flag.strip()
                 })
             else:
                 results_eligible.append({
                     'Policy Number': pol_num, 'Agent Code': agent_code, 'Agent Name': agent_name, 
                     'Premium': premium, 'Product Category & Name': f"Cat {cat_num} - {prod_name}", 
-                    'Points': pts, 'Remarks': f"Meets criteria (Rule Line 5/6). mapped to {prod_name}{premium_remark}", 'Review Needed': review_flag
+                    'Points': pts, 'Remarks': f"Meets criteria (Rule Line 5/6). mapped to {prod_name}{premium_remark}", 'Review Needed': review_flag.strip()
                 })
 
         # --- END ITERATION ---
         final_eligible = pd.DataFrame(results_eligible).drop_duplicates(subset=['Policy Number'])
         final_ineligible = pd.DataFrame(results_ineligible).drop_duplicates(subset=['Policy Number'])
 
-        # Ensure core columns exist before grouping to prevent KeyErrors
         for col in ['Agent Code', 'Agent Name', 'Premium', 'Points']:
              if col not in final_eligible.columns:
                  final_eligible[col] = "Unknown" if 'Agent' in col else 0
@@ -358,11 +390,9 @@ def process_campaign_data(premium_file, motor_file=None, ho_master_file=None):
 
         summary_data = []
         if not final_eligible.empty:
-            # Group STRICTLY by unique identifier (Agent Code)
             grouped = final_eligible.groupby('Agent Code')
 
             for agent_code, group in grouped:
-                # Resolve the best Agent Name for this Agent Code
                 names = group['Agent Name'].dropna().unique()
                 valid_names = [n for n in names if str(n).strip().lower() not in ['unknown', 'nan', '']]
                 agent_name = valid_names[0] if valid_names else "Unknown"
@@ -394,7 +424,6 @@ def process_campaign_data(premium_file, motor_file=None, ho_master_file=None):
 
         summary_df = pd.DataFrame(summary_data)
         if not summary_df.empty:
-            # Sort descending by Total Points
             summary_df = summary_df.sort_values(by='Total Points', ascending=False)
 
         return summary_df, final_eligible, final_ineligible
@@ -410,23 +439,30 @@ Welcome to the offline, secure data processor.
 Upload your exact CSV files from the core system. No data leaves your browser.
 """)
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     st.subheader("1. Premium Register")
-    st.info("**Download Path:**\n`Dashboard -> Core reports -> Premium -> Premium Register`")
+    st.info("**Path:**\n`Dashboard -> Core reports -> Premium -> Premium Register`")
     prem_file = st.file_uploader("Upload Premium CSV", type=['csv'])
 
 with col2:
     st.subheader("2. Motor Details")
-    st.info("**Download Path:**\n`Dashboard -> Core reports -> Motor(Premium) -> Motor Business Details`")
+    st.info("**Path:**\n`Dashboard -> Core reports -> Motor(Premium) -> Motor Business Details`")
     mot_file = st.file_uploader("Upload Motor CSV", type=['csv'])
 
 with col3:
-    st.markdown("<div style='opacity: 0.7;'>", unsafe_allow_html=True)
-    st.subheader("3. HO Master List (Optional)")
-    st.info("**Master List Tracking:**\nUpload HO Master Policy List up to 11th to bypass Fresh/Renewal rules for 'NEW POLICY'.")
-    ho_master_file = st.file_uploader("Upload HO Master List (.xlsx)", type=['xlsx'])
+    st.markdown("<div style='opacity: 0.8;'>", unsafe_allow_html=True)
+    st.subheader("3. Class wise Premium (Optional)")
+    st.info("**Path:**\n`Dashboard -> Core reports -> Motor(Premium) -> Class wise Premium Register`\n*(Enhances CV-Taxi accuracy)*")
+    cw_file = st.file_uploader("Upload Class wise CSV", type=['csv'])
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with col4:
+    st.markdown("<div style='opacity: 0.8;'>", unsafe_allow_html=True)
+    st.subheader("4. HO Master List (Optional)")
+    st.info("**Master List Tracking:**\nUpload HO list up to 11th to bypass Fresh/Renewal rules for 'NEW POLICY'.")
+    ho_master_file = st.file_uploader("Upload HO Master List", type=['xlsx'])
     st.markdown("</div>", unsafe_allow_html=True)
 
 if st.button("Process Campaign Data", type="primary"):
@@ -434,22 +470,21 @@ if st.button("Process Campaign Data", type="primary"):
         st.error("Please upload at least the Premium Register CSV to begin.")
     else:
         with st.spinner("Executing rule engine..."):
-            summary, el_log, in_log = process_campaign_data(prem_file, mot_file, ho_master_file)
+            summary, el_log, in_log = process_campaign_data(prem_file, mot_file, cw_file, ho_master_file)
 
             if isinstance(in_log, str) and summary is None:
                 st.error(in_log)
             else:
                 st.success("Analysis Complete!")
-                st.markdown("**Note:** Please manually include Overseas Mediclaim, Criti Protect, and CGL Policies in your Eligible sheet if applicable, as their exact LOB codes are currently unidentified. Report LOB codes via WhatsApp to wa.me/919656077625.")
 
                 st.subheader("Category Reference Guide")
                 with st.expander("View Category Numbers & Products", expanded=False):
                     col_a, col_b = st.columns(2)
                     with col_a:
                         st.markdown("""
-                        * **Cat 1:** New India Mediclaim, Floater, Arogya Sanjeevani, Yuva Bharat, Overseas Travel Ease, **Overseas Mediclaim**
+                        * **Cat 1:** New India Mediclaim, Floater, Arogya Sanjeevani, Yuva Bharat, Overseas Mediclaim
                         * **Cat 2:** Top Up, Arogya Pragati Plus
-                        * **Cat 3:** Cancer Guard, **Criti Protect**
+                        * **Cat 3:** Cancer Guard, Criti Protect
                         * **Cat 4:** Private Car Package
                         * **Cat 5:** Goods Carrying (GVW <= 7500), Taxis (<= 6 Seating)
                         * **Cat 6:** School Bus, Staff Bus
@@ -463,7 +498,7 @@ if st.button("Process Campaign Data", type="primary"):
                         * **Cat 11:** Mahila Udyam, Bima Saathi
                         * **Cat 12:** Jewellers Block
                         * **Cat 13:** Householder, Griha Suvidha, Shopkeepers, Office Protection Shield
-                        * **Cat 14:** Public Liability, **CGL Policy**
+                        * **Cat 14:** Public Liability, CGL Policy
                         * **Cat 15:** My Cyber Policy
                         """)
 
