@@ -132,7 +132,7 @@ def process_campaign_data(premium_file, motor_file=None, cw_file=None, ho_master
             cw_df = clean_policy_numbers(cw_df, 'POLICY NUMBER')
             
             # Create rapid lookup dictionary mapping Policy Number -> Vehical Type
-            cw_dict = dict(zip(cw_df['POLICY NUMBER'], cw_df['VEHICAL TYPE'].astype(str).str.strip().upper()))
+            cw_dict = dict(zip(cw_df['POLICY NUMBER'], cw_df['VEHICAL TYPE'].astype(str).str.strip().str.upper()))
 
         # 4. Handle HO Master List (Optional)
         ho_fresh_policies = set()
