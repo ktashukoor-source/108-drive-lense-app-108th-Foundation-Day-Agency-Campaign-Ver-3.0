@@ -477,7 +477,7 @@ if st.button("Process Campaign Data", type="primary"):
             else:
                 st.success("Analysis Complete!")
 
-                st.markdown("**Note:** Please manually include Overseas Mediclaim, Criti Protect, and CGL Policies in your Eligible sheet if applicable, as their exact LOB codes are currently unidentified. Report LOB codes via WhatsApp to wa.me/919656077625.")
+                st.markdown("**Note:** Please manually include CGL Policies in your Eligible sheet if applicable, as their exact LOB codes are currently unidentified. Report LOB codes via WhatsApp to wa.me/919656077625.")
 
                 # --- NEW DISCLAIMER SECTION ---
                 st.subheader("⚠️ Disclaimer & Assumptions")
