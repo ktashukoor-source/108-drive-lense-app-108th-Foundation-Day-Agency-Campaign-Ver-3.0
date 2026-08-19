@@ -477,6 +477,21 @@ if st.button("Process Campaign Data", type="primary"):
             else:
                 st.success("Analysis Complete!")
 
+                st.markdown("**Note:** Please manually include Overseas Mediclaim, Criti Protect, and CGL Policies in your Eligible sheet if applicable, as their exact LOB codes are currently unidentified. Report LOB codes via WhatsApp to wa.me/919656077625.")
+
+                # --- NEW DISCLAIMER SECTION ---
+                st.subheader("⚠️ Disclaimer & Assumptions")
+                with st.expander("Assumptions made - Please indicate if you think its against campaign rules.", expanded=False):
+                    st.warning("""
+                    * Collection date is the crucial date, not policy start date.
+                    * Considered TP also for motor CV categories, though only package for Car. 
+                    * Enhancement=package for both Car and CV
+                    * Standalone OD is not considered as package 
+                    * For long Term policies (including Griha raksha) for the purpose of campaign whole policy premium is taken, not first year premium 
+                    * Autorickshaw not considered as Taxi<=6
+                    * Three Wheeled Goods considered for Motor CV category<7500gvw
+                    """)
+
                 st.subheader("Category Reference Guide")
                 with st.expander("View Category Numbers & Products", expanded=False):
                     col_a, col_b = st.columns(2)
